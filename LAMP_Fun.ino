@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.5
+// LAMP_Fun V.2.5.1
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -473,7 +473,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.5", 120, 85);
+  tft.drawString("V.2.5.1", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1163,6 +1163,16 @@ enum RespiracionConfigStep {
 
 RespiracionConfigStep respiracionStep = RESP_STEP_COLOR_INICIAL;
 
+// Estado visual de colores para RESPIRACION (pantalla de config)
+uint8_t respSliderPosInicial = 0;    // 0..255, posición knob izquierdo
+uint8_t respSliderPosFinal   = 255;  // 0..255, posición knob derecho
+
+uint16_t respColorInicialPreview = 0; // color actual del knob izquierdo (565)
+uint16_t respColorFinalPreview   = 0; // color actual del knob derecho (565)
+
+uint16_t respColorInicialSaved = 0;   // color confirmado para caja izquierda
+uint16_t respColorFinalSaved   = 0;   // color confirmado para caja derecha
+
 enum DateTimeField {
   FIELD_HOUR = 0,
   FIELD_MIN,
@@ -1303,11 +1313,156 @@ void drawRespiracionConfigScreen() {
 
   drawWifiSignalIcon();
 
-  // De momento, solo un texto centrado como marcador de posición
+  // Posición inicial de los knobs: 1/3 y 2/3 del recorrido
+  if (respiracionStep == RESP_STEP_COLOR_INICIAL &&
+      respSliderPosInicial == 0 && respSliderPosFinal == 255) {
+    respSliderPosInicial = 85;   // ~1/3 de 255
+    respSliderPosFinal   = 170;  // ~2/3 de 255
+  }
+
+  // --- Slider de color (similar al de colores de reloj) ---
+
+  int sx = 20;
+  int sy = 70;
+  int sw = 200;
+  int sh = 20;
+
+  // Marco del slider
+  tft.drawRect(sx, sy, sw, sh, TFT_WHITE);
+  tft.fillRect(sx + 1, sy + 1, sw - 2, sh - 2, TFT_BLACK);
+
+  // Paleta completa dentro del slider
+  for (int x = 0; x < sw; x++) {
+    float    ratio = (float)x / (float)(sw - 1);
+    uint8_t  pos   = (uint8_t)roundf(ratio * 255.0f);
+    uint8_t  r,g,b;
+    uint16_t c     = colorFromSlider(pos, r, g, b);
+    tft.drawFastVLine(sx + x, sy + 1, sh - 2, c);
+  }
+
+  // Barritas verticales en los extremos + etiquetas N y B
+
+  int markHeight = 12;
+  int markYTop   = sy - markHeight - 6;
+
+  // Extremo izquierdo = color inicial (N)
+  int xLeftMark = sx;
+  tft.drawLine(xLeftMark, markYTop, xLeftMark, markYTop + markHeight, TFT_WHITE);
   tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", xLeftMark, markYTop - 12);
+
+  // Extremo derecho = color final (B)
+  int xRightMark = sx + sw - 1;
+  tft.drawLine(xRightMark, markYTop, xRightMark, markYTop + markHeight, TFT_WHITE);
+  tft.drawString("B", xRightMark, markYTop - 12);
+
+  // --- Knobs tipo "barra blanca + bolita de color" ---
+
+  // Posiciones de knobs en coordenadas X
+  int knobXInicial = sx + 1 + (int)((respSliderPosInicial / 255.0f) * (sw - 4));
+  if (knobXInicial < sx + 1)       knobXInicial = sx + 1;
+  if (knobXInicial > sx + sw - 3)  knobXInicial = sx + sw - 3;
+
+  int knobXFinal = sx + 1 + (int)((respSliderPosFinal / 255.0f) * (sw - 4));
+  if (knobXFinal < sx + 1)       knobXFinal = sx + 1;
+  if (knobXFinal > sx + sw - 3)  knobXFinal = sx + sw - 3;
+
+  // Asegurar que el knob derecho no se cruce por la izquierda
+  if (knobXFinal <= knobXInicial) {
+    knobXFinal = knobXInicial + 4;
+    if (knobXFinal > sx + sw - 3) knobXFinal = sx + sw - 3;
+  }
+
+  // Colores preview de cada knob
+  uint8_t rN, gN, bN;
+  uint8_t rB, gB, bB;
+  respColorInicialPreview = colorFromSlider(respSliderPosInicial, rN, gN, bN);
+  respColorFinalPreview   = colorFromSlider(respSliderPosFinal,   rB, gB, bB);
+
+  // Solo bolitas de color, sin barra vertical
+  int knobBallR = 7;                       // tamaño similar al de los sliders de reloj
+  int knobBallY = sy - knobBallR - 5;     // unos píxeles por encima del borde superior
+
+  // Knob inicial
+  tft.fillCircle(knobXInicial, knobBallY, knobBallR, respColorInicialPreview);
+  tft.drawCircle(knobXInicial, knobBallY, knobBallR, TFT_WHITE);
+
+  // Knob final
+  tft.fillCircle(knobXFinal, knobBallY, knobBallR, respColorFinalPreview);
+  tft.drawCircle(knobXFinal, knobBallY, knobBallR, TFT_WHITE);
+
+  // --- Valores RGB del color activo, en tamaño más grande ---
+
+  uint8_t rSel = 0, gSel = 0, bSel = 0;
+  if (respiracionStep == RESP_STEP_COLOR_FINAL) {
+    rSel = rB; gSel = gB; bSel = bB;
+  } else {
+    rSel = rN; gSel = gN; bSel = bN;
+  }
+
+  tft.setTextSize(2);                  // tamaño más grande
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Config. RESPIRACION", 120, 120);
+
+  char buf[32];
+  int rgbY = sy + sh + 20;
+
+  char partR[8], partG[8], partB[8];
+  snprintf(partR, sizeof(partR), "R:%d", rSel);
+  snprintf(partG, sizeof(partG), "G:%d", gSel);
+  snprintf(partB, sizeof(partB), "B:%d", bSel);
+
+  snprintf(buf, sizeof(buf), "%s %s %s", partR, partG, partB);
+  tft.drawString(buf, 120, rgbY);
+
+  // --- Cajas de color inicial y final ---
+
+  int boxY    = rgbY + 26;
+  int boxW    = 80;
+  int boxH    = 24;
+  int boxGap  = 20;
+
+  //Centrar las dos cajas en la pantalla
+  int totalBoxesWidth = boxW * 2 + boxGap;
+  int boxXIni = (240 - totalBoxesWidth) /2;
+  int boxXFin = boxXIni + boxW + boxGap;
+
+  // Fondo de ambas cajas
+  tft.fillRect(boxXIni, boxY, boxW, boxH, TFT_BLACK);
+  tft.fillRect(boxXFin, boxY, boxW, boxH, TFT_BLACK);
+
+  // Relleno con colores guardados (de momento, usamos preview como placeholder)
+  uint16_t cIni = (respColorInicialSaved != 0) ? respColorInicialSaved : respColorInicialPreview;
+  uint16_t cFin = (respColorFinalSaved   != 0) ? respColorFinalSaved   : respColorFinalPreview;
+
+  tft.fillRect(boxXIni + 1, boxY + 1, boxW - 2, boxH - 2, cIni);
+  tft.fillRect(boxXFin + 1, boxY + 1, boxW - 2, boxH - 2, cFin);
+
+  tft.drawRect(boxXIni, boxY, boxW, boxH, TFT_WHITE);
+  tft.drawRect(boxXFin, boxY, boxW, boxH, TFT_WHITE);
+
+  // Flechitas indicando foco (aún solo dibujamos según respiracionStep)
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  if (respiracionStep == RESP_STEP_COLOR_INICIAL) {
+    // Flecha -> a la izquierda de la caja inicial
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", boxXIni - 4, boxY + boxH / 2);
+  } else if (respiracionStep == RESP_STEP_COLOR_FINAL) {
+    // Flecha <- a la derecha de la caja final
+    tft.setTextDatum(ML_DATUM);
+    tft.drawString("<", boxXFin + boxW + 4, boxY + boxH / 2);
+  } else {
+    // En otros pasos (CICLO, INICIAR) no dibujamos flechas en estas cajas
+  }
+
+  // Más adelante, debajo de estas cajas añadiremos:
+  // - la línea "Ciclo: X.X s" con su flecha y formato exacto
+  // - el botón "Iniciar" en la parte baja de la pantalla.
 }
 
 // ---------- Submenú Efectos luz ----------
@@ -2145,7 +2300,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.5",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.5.1",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -2159,7 +2314,7 @@ void drawSettingsAboutScreen() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("LAMP_Fun V2.5");
+  Serial.println("LAMP_Fun V2.5.1");
 
   initBacklight();
 
