@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.4.2
+// LAMP_Fun V.2.5
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -126,6 +126,7 @@ enum Screen {
   SCREEN_SETTINGS_TZOFFSET,
   SCREEN_SETTINGS_MAIN,
   SCREEN_SETTINGS_LAMP,
+  SCREEN_SETTINGS_LAMP_CONFIG,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -472,7 +473,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.4.2", 120, 85);
+  tft.drawString("V.2.5", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1148,6 +1149,20 @@ int settingsTzOffsetTemp = 0;
 
 int resetConfirmIndex = 1; // 0 = SI, 1 = NO
 
+// Submenú Efectos luz
+int settingsLampIndex = 0;
+const int SETTINGS_LAMP_ITEMS = 1; // de momento solo RESPIRACION
+
+// Estado básico de la pantalla de configuración de RESPIRACION
+enum RespiracionConfigStep {
+  RESP_STEP_COLOR_INICIAL = 0,
+  RESP_STEP_COLOR_FINAL,
+  RESP_STEP_CICLO,
+  RESP_STEP_INICIAR
+};
+
+RespiracionConfigStep respiracionStep = RESP_STEP_COLOR_INICIAL;
+
 enum DateTimeField {
   FIELD_HOUR = 0,
   FIELD_MIN,
@@ -1260,6 +1275,71 @@ void drawSettingsMainScreen() {
   for (int i = 0; i < SETTINGS_MAIN_ITEMS; i++) {
     int  y        = startY + i * lineH;
     bool selected = (i == settingsMainIndex);
+
+    if (selected) {
+      tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
+      tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
+    } else {
+      tft.fillRect(10, y - 2, 220, lineH, TFT_BLACK);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    }
+    tft.drawString(lines[i], 14, y);
+  }
+}
+
+// ---------- Configuración efecto RESPIRACION ----------
+
+void drawRespiracionConfigScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars    = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("RESPIRACION", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // De momento, solo un texto centrado como marcador de posición
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Config. RESPIRACION", 120, 120);
+}
+
+// ---------- Submenú Efectos luz ----------
+
+void drawSettingsLampScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars    = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Efectos luz", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // Lista de efectos (de momento, solo RESPIRACION)
+  tft.setTextSize(2);
+  tft.setTextDatum(TL_DATUM);
+
+  const char* lines[SETTINGS_LAMP_ITEMS] = {
+    "RESPIRACION"
+  };
+
+  int startY = 60;
+  int lineH  = 24;
+
+  for (int i = 0; i < SETTINGS_LAMP_ITEMS; i++) {
+    int  y        = startY + i * lineH;
+    bool selected = (i == settingsLampIndex);
 
     if (selected) {
       tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
@@ -1761,30 +1841,6 @@ void drawSettingsBacklightScreen() {
   tft.drawString(buf, 120, y + barH + 18);
 }
 
-// ---------- Efectos luz (placeholder + RESPIRACION) ----------
-
-void drawSettingsLampScreen() {
-  tft.fillScreen(TFT_BLACK);
-  lastWifiBars    = -1;
-  lastWifiTachado = false;
-
-  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos luz", 120, 15);
-
-  drawWifiSignalIcon();
-
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
-  tft.drawString("Aqui iran efectos", 120, 100);
-  tft.drawString("y fade-in",         120, 130);
-  tft.drawString("RESPIRACION",       120, 160);
-}
-
 // ---------- Menús WiFi ----------
 
 int  wifiMenuIndex    = 0;
@@ -2089,7 +2145,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.4.2",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.5",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -2103,7 +2159,7 @@ void drawSettingsAboutScreen() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("LAMP_Fun V2.4.2");
+  Serial.println("LAMP_Fun V2.5");
 
   initBacklight();
 
@@ -2319,6 +2375,7 @@ void loop() {
             drawSettingsBacklightScreen();
             break;
           case 2:
+            settingsLampIndex = 0;
             currentScreen = SCREEN_SETTINGS_LAMP;
             drawSettingsLampScreen();
             break;
@@ -2611,10 +2668,61 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_LAMP: {
-      if (btn2Falling || encButtonFalling) {
+      // De momento solo hay una opción: RESPIRACION.
+      // El encoder aquí solo serviría en el futuro para más efectos;
+      // ahora no cambia nada al girar.
+
+      if (stepDir != 0) {
+        // Si en el futuro hay más efectos, aquí se moverá settingsLampIndex.
+        // Por ahora solo redibujamos por si queremos reaccionar.
+        drawSettingsLampScreen();
+      }
+
+      if (encButtonFalling) {
+        // Solo hay una opción por ahora: RESPIRACION (índice 0)
+        if (settingsLampIndex == 0) {
+          // Al entrar en la pantalla de configuración, empezamos
+          // en el paso de color inicial
+          respiracionStep = RESP_STEP_COLOR_INICIAL;
+          currentScreen   = SCREEN_SETTINGS_LAMP_CONFIG; // seguimos en el mismo enum
+          drawRespiracionConfigScreen();
+          // OJO: en el siguiente paso separaremos la pantalla de lista
+          // del modo "config"; de momento reutilizamos SCREEN_SETTINGS_LAMP
+          // para ver que el salto funciona.
+        }
+      }
+
+      if (btn2Falling) {
+        // Salir al menú Ajustes sin cambiar nada
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_LAMP_CONFIG: {
+      // Pantalla de configuración del efecto RESPIRACION.
+      // De momento solo mostramos el diseño base y permitimos salir con botón 2.
+
+      if (stepDir != 0) {
+        // Más adelante usaremos el encoder para mover knobs y ciclo.
+        // Ahora no hace nada, solo podrías redibujar si quisieras.
+        // drawRespiracionConfigScreen();
+      }
+
+      if (encButtonFalling) {
+        // En el siguiente paso implementaremos aquí:
+        // - avance de RESP_STEP_COLOR_INICIAL -> RESP_STEP_COLOR_FINAL -> ...
+      }
+
+      if (btn2Falling) {
+        // Salir SIN guardar cambios:
+        // volvemos al submenú "Efectos luz"
+        currentScreen = SCREEN_SETTINGS_LAMP;
+        drawSettingsLampScreen();
+      }
+
       break;
     }
 
