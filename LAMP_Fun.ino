@@ -2962,32 +2962,31 @@ void loop() {
         drawSettingsLampScreen();
       }
 
-        if (settingsLampIndex == 0) { // RESPIRACION
-          respiracionStep = RESP_STEP_COLOR_INICIAL;
+      if (settingsLampIndex == 0) { // RESPIRACION
+        respiracionStep = RESP_STEP_COLOR_INICIAL;
 
-          // Usar SIEMPRE la configuración persistente guardada en NVS
-          uint8_t r,g,b;
+        // Usar SIEMPRE la configuración persistente guardada en NVS
+        uint8_t r,g,b;
 
-          // Color inicial desde NVS
-          color565ToRGB(respCfgColorIni565, r, g, b);
-          respSliderPosInicial = mapColorToSlider(r, g, b);
-          respColorInicialSaved = respCfgColorIni565;
+        // Color inicial desde NVS
+        color565ToRGB(respCfgColorIni565, r, g, b);
+        respSliderPosInicial = mapColorToSlider(r, g, b);
+        respColorInicialSaved = respCfgColorIni565;
 
-          // Color final desde NVS
-          color565ToRGB(respCfgColorFin565, r, g, b);
-          respSliderPosFinal = mapColorToSlider(r, g, b);
-          respColorFinalSaved = respCfgColorFin565;
+        // Color final desde NVS
+        color565ToRGB(respCfgColorFin565, r, g, b);
+        respSliderPosFinal = mapColorToSlider(r, g, b);
+        respColorFinalSaved = respCfgColorFin565;
 
-          // Ciclo desde NVS
-          respCicloIndex = respCfgCicloIndex;
-          if (respCicloIndex >= RESP_CICLO_COUNT) respCicloIndex = 8;
-          respCicloSegundos = RESP_CICLO_VALUES[respCicloIndex];
+        // Ciclo desde NVS
+        respCicloIndex = respCfgCicloIndex;
+        if (respCicloIndex >= RESP_CICLO_COUNT) respCicloIndex = 8;
+        respCicloSegundos = RESP_CICLO_VALUES[respCicloIndex];
 
-          currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
-          drawRespiracionConfigScreen();
-        }
+        currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
+        drawRespiracionConfigScreen();
       }
-
+      
       if (btn2Falling) {
         // Salir al menú Ajustes sin cambiar nada
         currentScreen = SCREEN_SETTINGS_MAIN;
