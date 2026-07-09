@@ -1248,7 +1248,7 @@ int settingsTzOffsetTemp = 0;
 
 int resetConfirmIndex = 1; // 0 = SI, 1 = NO
 
-// Submenú Efectos luz
+// Submenú Efectos
 int settingsLampIndex = 0;
 const int SETTINGS_LAMP_ITEMS = 1; // de momento solo RESPIRACION
 
@@ -1351,7 +1351,7 @@ void drawSettingsMainScreen() {
   const char* lines[SETTINGS_MAIN_ITEMS] = {
     "Ajustes reloj",
     "Backlight TFT",
-    "Efectos luz",
+    "Efectos",
     "WiFi",
     "Reinicio HW",
     "Acerca de...",
@@ -1566,7 +1566,7 @@ void drawRespiracionConfigScreen() {
 
 }
 
-// ---------- Submenú Efectos luz ----------
+// ---------- Submenú Efectos ----------
 
 void drawSettingsLampScreen() {
   tft.fillScreen(TFT_BLACK);
@@ -1578,7 +1578,7 @@ void drawSettingsLampScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos luz", 120, 15);
+  tft.drawString("Efectos", 120, 15);
 
   drawWifiSignalIcon();
 
@@ -3064,7 +3064,7 @@ void loop() {
         }
       }
 
-      // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos luz
+      // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos
       if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
