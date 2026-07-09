@@ -61,27 +61,61 @@ TFT_eSPI tft;
 CRGB     leds[NUM_LEDS];
 Preferences prefs;
 
-bool    lampOn       = true;
-bool    rainbowMode  = false;
-uint8_t brightness   = 5;
-uint8_t redValue     = 50;
-uint8_t greenValue   = 50;
-uint8_t blueValue    = 50;
-uint8_t rainbowHue   = 0;
+bool lampOn = true;
+bool rainbowMode = false;
+uint8_t brightness = 5;
+uint8_t redValue = 50;
+uint8_t greenValue = 50;
+uint8_t blueValue = 50;
+uint8_t rainbowHue = 0;
 
 // --------- Efecto RESPIRACION ---------
 
-bool respEffectActive = false;   // si el efecto está corriendo
-bool respEffectForward = true;   // subiendo (true) o bajando (false)
-unsigned long respLastUpdate = 0;
+bool respEffectActive   = false;  // si el efecto está corriendo
+bool respEffectForward  = true;   // subiendo (true) o bajando (false)
+unsigned long respLastUpdate = 0; // último millis usado
 
 // Intensidad actual 0..255 para interpolar entre color inicial/final
 uint8_t respPhase = 0;
 
 // Config persistente del efecto (guardada en NVS)
-uint16_t respCfgColorIni565  = TFT_RED;   // por defecto
+uint16_t respCfgColorIni565  = TFT_RED;   // por defecto si no hay NVS
 uint16_t respCfgColorFin565  = TFT_BLUE;  // por defecto
-uint8_t  respCfgCicloIndex   = 8;         // 8 -> 1.0 s en RESP_CICLO_VALUES
+uint8_t  respCfgCicloIndex   = 8;         // 1.0 s en RESP_CICLO_VALUES
+
+// Estado de la pantalla de configuración RESPIRACION
+enum RespiracionConfigStep {
+  RESP_STEP_COLOR_INICIAL = 0,
+  RESP_STEP_COLOR_FINAL,
+  RESP_STEP_CICLO,
+  RESP_STEP_INICIAR
+};
+
+RespiracionConfigStep respiracionStep = RESP_STEP_COLOR_INICIAL;
+
+// Estado visual de colores para RESPIRACION (pantalla de config)
+uint8_t respSliderPosInicial = 0;    // 0..255, posición knob izquierdo
+uint8_t respSliderPosFinal   = 255;  // 0..255, posición knob derecho
+
+uint16_t respColorInicialPreview = 0; // color actual del knob izquierdo (565)
+uint16_t respColorFinalPreview   = 0; // color actual del knob derecho (565)
+
+uint16_t respColorInicialSaved = 0;   // color confirmado para caja izquierda
+uint16_t respColorFinalSaved   = 0;   // color confirmado para caja derecha
+
+// Tabla de valores de ciclo en segundos
+const int RESP_CICLO_COUNT = 28;
+const float RESP_CICLO_VALUES[RESP_CICLO_COUNT] = {
+  0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f,
+  1.0f,
+  2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
+  10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f,
+  17.0f, 18.0f, 19.0f, 20.0f
+};
+
+// Índice actual y valor visible del ciclo
+int   respCicloIndex    = 8;          // 8 -> 1.0 s
+float respCicloSegundos = 1.0f;       // sincronizado con RESP_CICLO_VALUES[respCicloIndex]
 
 bool use24hFormat = true;
 bool useAutoTime  = true;
@@ -182,17 +216,6 @@ int readEncoderStep() {
 
 // ----------------- NVS (config general) -----------------
 
-// --- Tabla de ciclos RESPIRACION (debe estar antes de loadConfig) ---
-
-const int RESP_CICLO_COUNT = 28;
-const float RESP_CICLO_VALUES[RESP_CICLO_COUNT] = {
-  0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f,
-  1.0f,
-  2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
-  10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f,
-  17.0f, 18.0f, 19.0f, 20.0f
-};
-
 void loadConfig() {
   if (!prefs.begin("lamp_cfg", false)) {
     redValue          = 50;
@@ -229,11 +252,16 @@ void loadConfig() {
   tzIndex       = (int8_t)prefs.getChar("tzIndex", 1);
   tzOffsetSteps = (int8_t)prefs.getChar("tzOff", 0);
 
+    // ... ya lees R,G,B, brillo, formatos, colores de reloj, etc.
+
   // --- Config efecto RESPIRACION ---
   respCfgColorIni565 = prefs.getUShort("respIni", TFT_RED);
   respCfgColorFin565 = prefs.getUShort("respFin", TFT_BLUE);
   respCfgCicloIndex  = (uint8_t)prefs.getUChar("respCix", 8);
-  if (respCfgCicloIndex >= RESP_CICLO_COUNT) respCfgCicloIndex = 8;
+
+  if (respCfgCicloIndex >= RESP_CICLO_COUNT) {
+    respCfgCicloIndex = 8;
+  }
 
   prefs.end();
 
@@ -392,14 +420,14 @@ void updateLeds() {
   FastLED.show();
 }
 
-// Conversión sencilla de RGB565 a R,G,B 8 bits
+// Convierte color 565 a componentes RGB 8 bits
 void color565ToRGB(uint16_t c, uint8_t &r, uint8_t &g, uint8_t &b) {
   r = ((c >> 11) & 0x1F) << 3;
   g = ((c >> 5)  & 0x3F) << 2;
   b = (c & 0x1F) << 3;
 }
 
-// Interpolación lineal entre dos colores 565 usando t = 0..255
+// Interpola linealmente entre dos colores 565, t=0..255
 uint16_t lerpColor565(uint16_t c1, uint16_t c2, uint8_t t) {
   uint8_t r1, g1, b1, r2, g2, b2;
   color565ToRGB(c1, r1, g1, b1);
@@ -412,17 +440,18 @@ uint16_t lerpColor565(uint16_t c1, uint16_t c2, uint8_t t) {
   return tft.color565(r, g, b);
 }
 
-// Arrancar y parar el efecto RESPIRACION
+// Inicia el efecto RESPIRACION
 void startRespEffect() {
-  respEffectActive = true;
+  respEffectActive  = true;
   respEffectForward = true;
-  respPhase = 0;
-  respLastUpdate = millis();
+  respPhase         = 0;
+  respLastUpdate    = millis();
 }
 
+// Detiene el efecto RESPIRACION
 void stopRespEffect() {
   respEffectActive = false;
-  // Restaurar el color fijo de la pantalla Luz
+  // Opcional: restaurar color fijo actual
   updateLeds();
 }
 
@@ -1223,30 +1252,6 @@ int resetConfirmIndex = 1; // 0 = SI, 1 = NO
 int settingsLampIndex = 0;
 const int SETTINGS_LAMP_ITEMS = 1; // de momento solo RESPIRACION
 
-// Estado básico de la pantalla de configuración de RESPIRACION
-enum RespiracionConfigStep {
-  RESP_STEP_COLOR_INICIAL = 0,
-  RESP_STEP_COLOR_FINAL,
-  RESP_STEP_CICLO,
-  RESP_STEP_INICIAR
-};
-
-RespiracionConfigStep respiracionStep = RESP_STEP_COLOR_INICIAL;
-
-// Estado visual de colores para RESPIRACION (pantalla de config)
-uint8_t respSliderPosInicial = 0;    // 0..255, posición knob izquierdo
-uint8_t respSliderPosFinal   = 255;  // 0..255, posición knob derecho
-
-uint16_t respColorInicialPreview = 0; // color actual del knob izquierdo (565)
-uint16_t respColorFinalPreview   = 0; // color actual del knob derecho (565)
-
-uint16_t respColorInicialSaved = 0;   // color confirmado para caja izquierda
-uint16_t respColorFinalSaved   = 0;   // color confirmado para caja derecha
-
-// Índice actual y valor visible del ciclo
-int   respCicloIndex    = 8;          // 8 -> 1.0 s en RESP_CICLO_VALUES
-float respCicloSegundos = 1.0f;       // sincronizado con RESP_CICLO_VALUES[respCicloIndex]
-
 enum DateTimeField {
   FIELD_HOUR = 0,
   FIELD_MIN,
@@ -1373,21 +1378,6 @@ void drawSettingsMainScreen() {
 
 // ---------- Configuración efecto RESPIRACION ----------
 
-// Convierte un color RGB aproximado a posición de slider 0..255
-uint8_t mapColorToSlider(uint8_t r, uint8_t g, uint8_t b) {
-  // Casos especiales: negro y blanco exactos
-  if (r == 0 && g == 0 && b == 0) {
-    return 0;          // negro => slider al inicio
-  }
-  if (r == 255 && g == 255 && b == 255) {
-    return 255;        // blanco => slider al final
-  }
-
-  // Para el resto, aproximamos usando el canal rojo,
-  // que es suficientemente razonable para muchos colores básicos.
-  return r;
-}
-
 void drawRespiracionConfigScreen() {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
@@ -1401,13 +1391,6 @@ void drawRespiracionConfigScreen() {
   tft.drawString("RESPIRACION", 120, 15);
 
   drawWifiSignalIcon();
-
-  // Posición inicial de los knobs: 1/3 y 2/3 del recorrido
-  if (respiracionStep == RESP_STEP_COLOR_INICIAL &&
-      respSliderPosInicial == 0 && respSliderPosFinal == 255) {
-    respSliderPosInicial = 85;   // ~1/3 de 255
-    respSliderPosFinal   = 170;  // ~2/3 de 255
-  }
 
   // --- Slider de color (similar al de colores de reloj) ---
 
@@ -1908,6 +1891,11 @@ uint8_t sliderPosFromColor(uint16_t c) {
   uint8_t maxc = max(r, max(g,b));
   uint8_t minc = min(r, min(g,b));
 
+  // Casos exactos: negro y blanco puros
+  if (r == 0 && g == 0 && b == 0)   return 0;   // negro puro -> extremo izquierdo
+  if (r == 255 && g == 255 && b == 255) return 255; // blanco puro -> extremo derecho
+
+  //Casos "casi" negro/blanco, como ya tenías
   if (maxc < 8)   return 0;
   if (minc > 247) return 255;
 
@@ -2541,29 +2529,26 @@ void loop() {
     case SCREEN_CLOCK: {
       updateClockScreen();
 
+      // 1) Giro de encoder o pulsación encoder -> parar RESPIRACION y pasar a LUZ
       if (stepDir != 0 || encButtonFalling) {
-        // Si hay efecto RESPIRACION activo, pararlo y restaurar LEDs
         if (respEffectActive) {
-          stopRespEffect();
+          stopRespEffect();   // apaga el efecto y deja los LEDs en el RGB de Luz
         }
-
-        currentScreen  = SCREEN_LIGHT;
+        currentScreen = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
-        editingBar     = false;
+        editingBar = false;
         drawLightScreen();
       }
 
+      // 2) Pulsador 2 -> parar RESPIRACION y pasar a Ajustes
       if (btn2Falling) {
-        // Si hay efecto respiración activo, pararlo y restaurar LEDs
         if (respEffectActive) {
-          stopRespEffect();
+          stopRespEffect(); // apaga el efecto y deja los LEDs en el RGB de Luz
         }
-
         settingsMainIndex = 0;
-        currentScreen     = SCREEN_SETTINGS_MAIN;
+        currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
-
       break;
     }
 
@@ -2952,30 +2937,28 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_LAMP: {
-      // De momento solo hay una opción: RESPIRACION.
-      // El encoder aquí solo serviría en el futuro para más efectos;
-      // ahora no cambia nada al girar.
-
+      // De momento no usamos el encoder para moverse entre varios efectos,
+      // pero dejamos el esqueleto por si luego añades más.
       if (stepDir != 0) {
-        // Si en el futuro hay más efectos, aquí se moverá settingsLampIndex.
-        // Por ahora solo redibujamos por si queremos reaccionar.
-        drawSettingsLampScreen();
+        // Aquí podrías mover un índice de efecto, por ahora lo ignoramos
       }
 
-      if (settingsLampIndex == 0) { // RESPIRACION
+      if (encButtonFalling) {
+        // Entrar directamente en configuración de RESPIRACION
+
         respiracionStep = RESP_STEP_COLOR_INICIAL;
 
-        // Usar SIEMPRE la configuración persistente guardada en NVS
+        // Inicializar sliders a partir de la config persistente
         uint8_t r,g,b;
 
-        // Color inicial desde NVS
+        // Color inicial desde 565
         color565ToRGB(respCfgColorIni565, r, g, b);
-        respSliderPosInicial = mapColorToSlider(r, g, b);
+        respSliderPosInicial = sliderPosFromColor(respCfgColorIni565);
         respColorInicialSaved = respCfgColorIni565;
 
-        // Color final desde NVS
+        // Color final desde 565
         color565ToRGB(respCfgColorFin565, r, g, b);
-        respSliderPosFinal = mapColorToSlider(r, g, b);
+        respSliderPosFinal = sliderPosFromColor(respCfgColorFin565);
         respColorFinalSaved = respCfgColorFin565;
 
         // Ciclo desde NVS
@@ -2985,10 +2968,10 @@ void loop() {
 
         currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
         drawRespiracionConfigScreen();
+        
       }
-      
+
       if (btn2Falling) {
-        // Salir al menú Ajustes sin cambiar nada
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3069,14 +3052,15 @@ void loop() {
           respCfgColorIni565 = respColorInicialSaved;
           respCfgColorFin565 = respColorFinalSaved;
           respCfgCicloIndex  = (uint8_t)respCicloIndex;
-          saveConfigBasic();   // guarda en NVS
+          saveConfigBasic();   // guarda en NVS junto con el resto
 
           // 2) Iniciar efecto RESPIRACION
           startRespEffect();
 
-          // 3) Pasar a la pantalla de reloj mientras el efecto está activo
-          currentScreen = SCREEN_CLOCK;
+          // 3) Salir a la pantalla principal de luz
+          currentScreen = SCREEN_CLOCK;   // por ejemplo
           drawClockScreenFull();
+
         }
       }
 
@@ -3393,6 +3377,7 @@ void loop() {
       break;
   }
 
+
   // --- Actualizar efecto RESPIRACION si está activo ---
 
   if (respEffectActive) {
@@ -3432,7 +3417,6 @@ void loop() {
       // Calcular color actual interpolado
       uint16_t cNow = lerpColor565(respCfgColorIni565, respCfgColorFin565, respPhase);
 
-      // Aplicarlo a todos los LEDs
       uint8_t r,g,b;
       color565ToRGB(cNow, r, g, b);
       for (int i = 0; i < NUM_LEDS; i++) {
@@ -3443,14 +3427,60 @@ void loop() {
     }
   }
 
-  lastSw   = sw;
+  lastSw = sw;
   lastBtn2 = btn2;
 
+  // --- Actualizar efecto arco iris si está activo ---
   if (lampOn && rainbowMode) {
     rainbowHue++;
     updateLeds();
-    delay(20);
   }
 
-  delay(2);
+  // --- Actualizar efecto RESPIRACION si está activo ---
+  if (lampOn && respEffectActive) {
+    unsigned long now = millis();
+
+    // Duración total de un ciclo subida+bajada en ms
+    float cicloSeg = RESP_CICLO_VALUES[respCfgCicloIndex];
+    if (cicloSeg < 0.1f) cicloSeg = 0.1f;
+    float halfCycleMs = (cicloSeg * 1000.0f) / 2.0f;
+
+    if (now != respLastUpdate) {
+      float dt = (float)(now - respLastUpdate);
+      respLastUpdate = now;
+
+      float deltaPhase = (255.0f * dt) / halfCycleMs;
+      int phase = respPhase;
+
+      if (respEffectForward) {
+        phase += (int)deltaPhase;
+        if (phase >= 255) {
+          phase = 255;
+          respEffectForward = false;
+        }
+      } else {
+        phase -= (int)deltaPhase;
+        if (phase <= 0) {
+          phase = 0;
+          respEffectForward = true;
+        }
+      }
+
+      if (phase < 0) phase = 0;
+      if (phase > 255) phase = 255;
+
+      respPhase = (uint8_t)phase;
+
+      // Calcular color actual interpolado
+      uint16_t cNow = lerpColor565(respCfgColorIni565, respCfgColorFin565, respPhase);
+
+      uint8_t r,g,b;
+      color565ToRGB(cNow, r, g, b);
+      for (int i = 0; i < NUM_LEDS; i++) {
+        leds[i] = CRGB(r, g, b);
+      }
+      FastLED.setBrightness(brightness);
+      FastLED.show();
+    }
+  }
 }
