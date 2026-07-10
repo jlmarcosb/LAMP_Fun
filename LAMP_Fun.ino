@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.5.1
+// LAMP_Fun V.2.5.2
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -133,6 +133,52 @@ uint16_t analogFaceFillColor  = TFT_BLACK;
 
 bool firstManualBoot = false;
 
+// --------- Efecto COMETA (V.2.5.2) ---------
+
+// Estado de ejecución
+bool cometaEffectActive   = false;
+float cometaHeadPos       = 0.0f;      // 0.0..1.0 vuelta completa
+float cometaLength        = 0.20f;     // fracción de vuelta ocupada por la cola
+unsigned long cometaLastUpdate = 0;
+
+// Config persistente del efecto (guardada en NVS)
+uint16_t cometaCfgColorHead565 = TFT_BLACK; // color cabeza por defecto
+uint16_t cometaCfgColorTail565 = TFT_WHITE; // color cola por defecto
+uint8_t  cometaCfgCicloIndex   = 4;         // índice por defecto en COMETA_CICLO_VALUES
+
+// Estado de la pantalla de configuración COMETA
+enum CometaConfigStep {
+  COMETA_STEP_COLOR_INICIAL = 0,
+  COMETA_STEP_COLOR_FINAL,
+  COMETA_STEP_CICLO,
+  COMETA_STEP_INICIAR
+};
+
+CometaConfigStep cometaStep = COMETA_STEP_COLOR_INICIAL;
+
+// Estado visual de sliders para COMETA
+uint8_t  cometaSliderPosInicial = 0;   // 0..255, knob izquierdo (cabeza)
+uint8_t  cometaSliderPosFinal   = 255; // 0..255, knob derecho (cola)
+
+uint16_t cometaColorHeadPreview = 0;   // color actual del knob cabeza
+uint16_t cometaColorTailPreview = 0;   // color actual del knob cola
+
+uint16_t cometaColorHeadSaved   = 0;   // color confirmado para caja izquierda
+uint16_t cometaColorTailSaved   = 0;   // color confirmado para caja derecha
+
+// Tabla de valores de ciclo (segundos por vuelta completa)
+const int COMETA_CICLO_COUNT = 12;
+const float COMETA_CICLO_VALUES[COMETA_CICLO_COUNT] = {
+  0.3f, 0.5f, 0.7f,
+  1.0f, 1.5f, 2.0f,
+  3.0f, 4.0f, 5.0f,
+  7.0f, 8.0f, 10.0f
+};
+
+// Índice actual y valor visible del ciclo
+int   cometaCicloIndex    = 4;         // por defecto 1.5 s por vuelta
+float cometaCicloSegundos = 1.5f;
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -175,6 +221,7 @@ enum Screen {
   SCREEN_SETTINGS_MAIN,
   SCREEN_SETTINGS_LAMP,
   SCREEN_SETTINGS_LAMP_CONFIG,
+  SCREEN_SETTINGS_COMETA_CONFIG,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -263,6 +310,12 @@ void loadConfig() {
     respCfgCicloIndex = 8;
   }
 
+  // Config COMETA (valores por defecto si no existen aún en NVS)
+  cometaCfgColorHead565 = prefs.getUShort("cmHead", TFT_BLACK);
+  cometaCfgColorTail565 = prefs.getUShort("cmTail", TFT_WHITE);
+  cometaCfgCicloIndex   = prefs.getUChar ("cmCIdx", 4);
+  if (cometaCfgCicloIndex >= COMETA_CICLO_COUNT) cometaCfgCicloIndex = 4;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -271,6 +324,11 @@ void loadConfig() {
   if (tzIndex < 0 || tzIndex >= TIMEZONES_COUNT) tzIndex = 1;
   if (tzOffsetSteps < -4) tzOffsetSteps = -4;
   if (tzOffsetSteps > 4)  tzOffsetSteps = 4;
+
+  // Inicializar valor visible del ciclo COMETA a partir del índice cargado
+  cometaCicloIndex    = cometaCfgCicloIndex;
+  cometaCicloSegundos = COMETA_CICLO_VALUES[cometaCicloIndex];
+
 
   firstManualBoot = !useAutoTime;
 }
@@ -305,6 +363,11 @@ void saveConfigBasic() {
   prefs.putUShort("respIni", respCfgColorIni565);
   prefs.putUShort("respFin", respCfgColorFin565);
   prefs.putUChar ("respCix", respCfgCicloIndex);
+
+  // Config COMETA
+  prefs.putUShort("cmHead", cometaCfgColorHead565);
+  prefs.putUShort("cmTail", cometaCfgColorTail565);
+  prefs.putUChar ("cmCIdx", cometaCfgCicloIndex);
 
   prefs.end();
 }
@@ -455,6 +518,26 @@ void stopRespEffect() {
   updateLeds();
 }
 
+// Inicia el efecto COMETA
+void startCometaEffect() {
+  // Asegurarse de que otros efectos de LEDs están parados
+  respEffectActive = false;
+  rainbowMode      = false;
+
+  cometaEffectActive = true;
+  cometaHeadPos      = 0.0f;
+  cometaLastUpdate   = millis();
+
+  // Opcional: longitud de cola fija o dependiente del ciclo
+  cometaLength = 0.25f; // 25% de la vuelta. Ajustable si quieres más corta/larga.
+}
+
+// Detiene el efecto COMETA y restaura la luz fija
+void stopCometaEffect() {
+  cometaEffectActive = false;
+  updateLeds();
+}
+
 // ----------------- Icono WiFi -----------------
 
 const int WIFI_ICON_X = 215;
@@ -572,7 +655,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.5.1", 120, 85);
+  tft.drawString("V.2.5.2", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1252,6 +1335,8 @@ int resetConfirmIndex = 1; // 0 = SI, 1 = NO
 int settingsLampIndex = 0;
 const int SETTINGS_LAMP_ITEMS = 1; // de momento solo RESPIRACION
 
+int efectosMenuIndex = 0;   // 0 = RESPIRACION, 1 = COMETA (más adelante se pueden añadir más)
+
 enum DateTimeField {
   FIELD_HOUR = 0,
   FIELD_MIN,
@@ -1566,9 +1651,7 @@ void drawRespiracionConfigScreen() {
 
 }
 
-// ---------- Submenú Efectos ----------
-
-void drawSettingsLampScreen() {
+void drawCometaConfigScreen() {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
   lastWifiTachado = false;
@@ -1578,24 +1661,199 @@ void drawSettingsLampScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
+  tft.drawString("COMETA", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // --- Slider de color (igual que RESPIRACION) ---
+
+  int sx = 20;
+  int sy = 70;
+  int sw = 200;
+  int sh = 20;
+
+  // Marco del slider
+  tft.drawRect(sx, sy, sw, sh, TFT_WHITE);
+  tft.fillRect(sx + 1, sy + 1, sw - 2, sh - 2, TFT_BLACK);
+
+  // Paleta completa dentro del slider
+  for (int x = 0; x < sw; x++) {
+    float    ratio = (float)x / (float)(sw - 1);
+    uint8_t  pos   = (uint8_t)roundf(ratio * 255.0f);
+    uint8_t  r,g,b;
+    uint16_t c     = colorFromSlider(pos, r, g, b);
+    tft.drawFastVLine(sx + x, sy + 1, sh - 2, c);
+  }
+
+  // Marcas N/B
+  int markHeight = 12;
+  int markYTop   = sy - markHeight - 6;
+
+  int xLeftMark = sx;
+  tft.drawLine(xLeftMark, markYTop, xLeftMark, markYTop + markHeight, TFT_WHITE);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", xLeftMark, markYTop - 12);
+
+  int xRightMark = sx + sw - 1;
+  tft.drawLine(xRightMark, markYTop, xRightMark, markYTop + markHeight, TFT_WHITE);
+  tft.drawString("B", xRightMark, markYTop - 12);
+
+  // --- Knobs ---
+
+  int knobXInicial = sx + 1 + (int)((cometaSliderPosInicial / 255.0f) * (sw - 4));
+  if (knobXInicial < sx + 1)       knobXInicial = sx + 1;
+  if (knobXInicial > sx + sw - 3)  knobXInicial = sx + sw - 3;
+
+  int knobXFinal = sx + 1 + (int)((cometaSliderPosFinal / 255.0f) * (sw - 4));
+  if (knobXFinal < sx + 1)       knobXFinal = sx + 1;
+  if (knobXFinal > sx + sw - 3)  knobXFinal = sx + sw - 3;
+
+  uint8_t rN, gN, bN;
+  uint8_t rB, gB, bB;
+  cometaColorHeadPreview = colorFromSlider(cometaSliderPosInicial, rN, gN, bN);
+  cometaColorTailPreview = colorFromSlider(cometaSliderPosFinal,   rB, gB, bB);
+
+  int knobBallR = 7;
+  int knobBallY = sy - knobBallR - 5;
+
+  tft.fillCircle(knobXInicial, knobBallY, knobBallR, cometaColorHeadPreview);
+  tft.drawCircle(knobXInicial, knobBallY, knobBallR, TFT_WHITE);
+
+  tft.fillCircle(knobXFinal, knobBallY, knobBallR, cometaColorTailPreview);
+  tft.drawCircle(knobXFinal, knobBallY, knobBallR, TFT_WHITE);
+
+  // --- Valores RGB del color activo ---
+
+  uint8_t rSel = 0, gSel = 0, bSel = 0;
+
+  // Qeremos que, una vez hemos pasado por COLOR_FINAL,
+  // tanto en CICLO como en INICIAR se siga mostrando el color final.
+  if (cometaStep == COMETA_STEP_COLOR_FINAL ||
+      cometaStep == COMETA_STEP_CICLO ||
+      cometaStep == COMETA_STEP_INICIAR) {
+    rSel = rB; gSel = gB; bSel = bB;
+  } else { // COMETA_STEP_COLOR_INICIAL
+    rSel = rN; gSel = gN; bSel = bN;
+  }
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+
+  char buf[32];
+  int rgbY = sy + sh + 20;
+
+  char partR[8], partG[8], partB[8];
+  snprintf(partR, sizeof(partR), "R:%d", rSel);
+  snprintf(partG, sizeof(partG), "G:%d", gSel);
+  snprintf(partB, sizeof(partB), "B:%d", bSel);
+
+  snprintf(buf, sizeof(buf), "%s %s %s", partR, partG, partB);
+  tft.drawString(buf, 120, rgbY);
+
+  // --- Cajas de color cabeza y cola ---
+
+  int boxY    = rgbY + 26;
+  int boxW    = 80;
+  int boxH    = 24;
+  int boxGap  = 20;
+
+  int totalBoxesWidth = boxW * 2 + boxGap;
+  int boxXIni = (240 - totalBoxesWidth) / 2;
+  int boxXFin = boxXIni + boxW + boxGap;
+
+  tft.fillRect(boxXIni, boxY, boxW, boxH, TFT_BLACK);
+  tft.fillRect(boxXFin, boxY, boxW, boxH, TFT_BLACK);
+
+  uint16_t cIni = (cometaColorHeadSaved != 0) ? cometaColorHeadSaved : cometaColorHeadPreview;
+  uint16_t cFin = (cometaColorTailSaved != 0) ? cometaColorTailSaved : cometaColorTailPreview;
+
+  tft.fillRect(boxXIni + 1, boxY + 1, boxW - 2, boxH - 2, cIni);
+  tft.fillRect(boxXFin + 1, boxY + 1, boxW - 2, boxH - 2, cFin);
+
+  tft.drawRect(boxXIni, boxY, boxW, boxH, TFT_WHITE);
+  tft.drawRect(boxXFin, boxY, boxW, boxH, TFT_WHITE);
+
+  // Flechas de foco
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  if (cometaStep == COMETA_STEP_COLOR_INICIAL) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", boxXIni - 4, boxY + boxH / 2);
+  } else if (cometaStep == COMETA_STEP_COLOR_FINAL) {
+    tft.setTextDatum(ML_DATUM);
+    tft.drawString("<", boxXFin + boxW + 4, boxY + boxH / 2);
+  }
+
+  // --- Línea de Ciclo ---
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  int cicloY = boxY + boxH + 26;
+  char bufC[24];
+  snprintf(bufC, sizeof(bufC), "Ciclo: %.1f s", cometaCicloSegundos);
+
+  if (cometaStep == COMETA_STEP_CICLO) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 40, cicloY);
+  }
+
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(bufC, 120, cicloY);
+
+  // --- Botón "Iniciar" ---
+
+  int btnW = 120;
+  int btnH = 32;
+  int btnX = (240 - btnW) / 2;
+  int btnY = 200;
+
+  bool selIniciar = (cometaStep == COMETA_STEP_INICIAR);
+
+  uint16_t bgBtn = selIniciar ? TFT_DARKGREY : TFT_BLACK;
+  uint16_t fgBtn = selIniciar ? TFT_NAVY     : TFT_WHITE;
+
+  tft.fillRect(btnX, btnY, btnW, btnH, bgBtn);
+  tft.setTextColor(fgBtn, bgBtn);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
+}
+
+// ---------- Submenú Efectos ----------
+
+void drawSettingsLampScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
   tft.drawString("Efectos", 120, 15);
 
   drawWifiSignalIcon();
 
-  // Lista de efectos (de momento, solo RESPIRACION)
   tft.setTextSize(2);
   tft.setTextDatum(TL_DATUM);
 
-  const char* lines[SETTINGS_LAMP_ITEMS] = {
-    "RESPIRACION"
+  const char* lines[] = {
+    "RESPIRACION",
+    "COMETA"
   };
+  const int items = 2;
 
-  int startY = 60;
+  int startY = 80;
   int lineH  = 24;
 
-  for (int i = 0; i < SETTINGS_LAMP_ITEMS; i++) {
-    int  y        = startY + i * lineH;
-    bool selected = (i == settingsLampIndex);
+  for (int i = 0; i < items; i++) {
+    int  y = startY + i * lineH;
+    bool selected = (i == efectosMenuIndex);
 
     if (selected) {
       tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
@@ -1604,6 +1862,7 @@ void drawSettingsLampScreen() {
       tft.fillRect(10, y - 2, 220, lineH, TFT_BLACK);
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
     }
+
     tft.drawString(lines[i], 14, y);
   }
 }
@@ -2406,7 +2665,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.5.1",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.5.2",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -2534,6 +2793,9 @@ void loop() {
         if (respEffectActive) {
           stopRespEffect();   // apaga el efecto y deja los LEDs en el RGB de Luz
         }
+        if (cometaEffectActive) {
+          stopCometaEffect();
+        }
         currentScreen = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar = false;
@@ -2544,6 +2806,9 @@ void loop() {
       if (btn2Falling) {
         if (respEffectActive) {
           stopRespEffect(); // apaga el efecto y deja los LEDs en el RGB de Luz
+        }
+        if (cometaEffectActive) {
+          stopCometaEffect();
         }
         settingsMainIndex = 0;
         currentScreen = SCREEN_SETTINGS_MAIN;
@@ -2644,7 +2909,7 @@ void loop() {
             drawSettingsBacklightScreen();
             break;
           case 2:
-            settingsLampIndex = 0;
+            efectosMenuIndex = 0;
             currentScreen = SCREEN_SETTINGS_LAMP;
             drawSettingsLampScreen();
             break;
@@ -2935,40 +3200,54 @@ void loop() {
       }
       break;
     }
-
+    
     case SCREEN_SETTINGS_LAMP: {
-      // De momento no usamos el encoder para moverse entre varios efectos,
-      // pero dejamos el esqueleto por si luego añades más.
+      // Menú de Efectos (RESPIRACION / COMETA)
+
       if (stepDir != 0) {
-        // Aquí podrías mover un índice de efecto, por ahora lo ignoramos
+        int delta = (stepDir > 0 ? 1 : -1);
+        efectosMenuIndex += delta;
+        if (efectosMenuIndex < 0) efectosMenuIndex = 1;
+        if (efectosMenuIndex > 1) efectosMenuIndex = 0;
+        drawSettingsLampScreen();
       }
 
       if (encButtonFalling) {
-        // Entrar directamente en configuración de RESPIRACION
+        if (efectosMenuIndex == 0) {
+          // Entrar en CONFIG de RESPIRACION
+          respiracionStep = RESP_STEP_COLOR_INICIAL;
 
-        respiracionStep = RESP_STEP_COLOR_INICIAL;
+          // Inicializar sliders con config RESPIRACION almacenada
+          respSliderPosInicial = sliderPosFromColor(respCfgColorIni565);
+          respColorInicialSaved = respCfgColorIni565;
 
-        // Inicializar sliders a partir de la config persistente
-        uint8_t r,g,b;
+          respSliderPosFinal   = sliderPosFromColor(respCfgColorFin565);
+          respColorFinalSaved  = respCfgColorFin565;
 
-        // Color inicial desde 565
-        color565ToRGB(respCfgColorIni565, r, g, b);
-        respSliderPosInicial = sliderPosFromColor(respCfgColorIni565);
-        respColorInicialSaved = respCfgColorIni565;
+          respCicloIndex = respCfgCicloIndex;
+          if (respCicloIndex >= RESP_CICLO_COUNT) respCicloIndex = 8;
+          respCicloSegundos = RESP_CICLO_VALUES[respCicloIndex];
 
-        // Color final desde 565
-        color565ToRGB(respCfgColorFin565, r, g, b);
-        respSliderPosFinal = sliderPosFromColor(respCfgColorFin565);
-        respColorFinalSaved = respCfgColorFin565;
+          currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
+          drawRespiracionConfigScreen();
+        } else if (efectosMenuIndex == 1) {
+          // Entrar en CONFIG de COMETA
+          cometaStep = COMETA_STEP_COLOR_INICIAL;
 
-        // Ciclo desde NVS
-        respCicloIndex = respCfgCicloIndex;
-        if (respCicloIndex >= RESP_CICLO_COUNT) respCicloIndex = 8;
-        respCicloSegundos = RESP_CICLO_VALUES[respCicloIndex];
+          // Inicializar sliders con config COMETA almacenada
+          cometaSliderPosInicial = sliderPosFromColor(cometaCfgColorHead565);
+          cometaColorHeadSaved   = cometaCfgColorHead565;
 
-        currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
-        drawRespiracionConfigScreen();
-        
+          cometaSliderPosFinal   = sliderPosFromColor(cometaCfgColorTail565);
+          cometaColorTailSaved   = cometaCfgColorTail565;
+
+          cometaCicloIndex    = cometaCfgCicloIndex;
+          if (cometaCicloIndex >= COMETA_CICLO_COUNT) cometaCicloIndex = 4;
+          cometaCicloSegundos = COMETA_CICLO_VALUES[cometaCicloIndex];
+
+          currentScreen = SCREEN_SETTINGS_COMETA_CONFIG;
+          drawCometaConfigScreen();
+        }
       }
 
       if (btn2Falling) {
@@ -3065,6 +3344,85 @@ void loop() {
       }
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos
+      if (btn2Falling) {
+        currentScreen = SCREEN_SETTINGS_LAMP;
+        drawSettingsLampScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_COMETA_CONFIG: {
+      // Pantalla de configuración del efecto COMETA.
+
+      // 1) Manejo del encoder
+      if (stepDir != 0) {
+        int delta = (stepDir > 0 ? 5 : -5);
+
+        if (cometaStep == COMETA_STEP_COLOR_INICIAL) {
+          int v = (int)cometaSliderPosInicial + delta;
+          if (v < 0)   v = 0;
+          if (v > 255) v = 255;
+          cometaSliderPosInicial = (uint8_t)v;
+          drawCometaConfigScreen();
+        }
+        else if (cometaStep == COMETA_STEP_COLOR_FINAL) {
+          int v = (int)cometaSliderPosFinal + delta;
+          if (v < 0)   v = 0;
+          if (v > 255) v = 255;
+          cometaSliderPosFinal = (uint8_t)v;
+          drawCometaConfigScreen();
+        }
+        else if (cometaStep == COMETA_STEP_CICLO) {
+          int step = (stepDir > 0 ? 1 : -1);
+          int idx  = cometaCicloIndex + step;
+
+          if (idx < 0) idx = 0;
+          if (idx >= COMETA_CICLO_COUNT) idx = COMETA_CICLO_COUNT - 1;
+
+          if (idx != cometaCicloIndex) {
+            cometaCicloIndex    = idx;
+            cometaCicloSegundos = COMETA_CICLO_VALUES[cometaCicloIndex];
+            drawCometaConfigScreen();
+          }
+        }
+      }
+
+      // 2) Pulsación del encoder
+      if (encButtonFalling) {
+        if (cometaStep == COMETA_STEP_COLOR_INICIAL) {
+          uint8_t rN, gN, bN;
+          cometaColorHeadSaved = colorFromSlider(cometaSliderPosInicial, rN, gN, bN);
+          cometaStep = COMETA_STEP_COLOR_FINAL;
+          drawCometaConfigScreen();
+        }
+        else if (cometaStep == COMETA_STEP_COLOR_FINAL) {
+          uint8_t rB, gB, bB;
+          cometaColorTailSaved = colorFromSlider(cometaSliderPosFinal, rB, gB, bB);
+          cometaStep = COMETA_STEP_CICLO;
+          drawCometaConfigScreen();
+        }
+        else if (cometaStep == COMETA_STEP_CICLO) {
+          cometaStep = COMETA_STEP_INICIAR;
+          drawCometaConfigScreen();
+        }
+        else if (cometaStep == COMETA_STEP_INICIAR) {
+          // Guardar config COMETA en NVS
+          cometaCfgColorHead565 = cometaColorHeadSaved;
+          cometaCfgColorTail565 = cometaColorTailSaved;
+          cometaCfgCicloIndex   = (uint8_t)cometaCicloIndex;
+          saveConfigBasic();
+
+          // Iniciar efecto COMETA
+          startCometaEffect();
+
+          // Ir al reloj
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        }
+      }
+
+      // 3) Botón 2 = salir SIN guardar cambios: vuelve al menú Efectos
       if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
@@ -3483,4 +3841,58 @@ void loop() {
       FastLED.show();
     }
   }
+
+  // --- Actualizar efecto COMETA si está activo ---
+  if (lampOn && cometaEffectActive) {
+    unsigned long now = millis();
+    if (now == cometaLastUpdate) {
+      // Nada de tiempo transcurrido, no hacemos trabajo
+    } else {
+      float dt = (float)(now - cometaLastUpdate);
+      cometaLastUpdate = now;
+
+      // Duración de una vuelta completa en ms
+      float cicloMs = cometaCicloSegundos * 1000.0f;
+      if (cicloMs < 10.0f) cicloMs = 10.0f;
+
+      // Avance de cabeza en fracción de vuelta
+      float deltaHead = dt / cicloMs;
+      cometaHeadPos += deltaHead;
+      // Envolver a 0..1
+      cometaHeadPos -= floorf(cometaHeadPos);
+      if (cometaHeadPos < 0.0f) cometaHeadPos += 1.0f;
+      if (cometaHeadPos > 1.0f) cometaHeadPos -= 1.0f;
+
+      // Para simplificar: tiramos de una distribución lineal 0..1 a lo largo de toda la tira.
+      // Más adelante podemos mapear por anillos concretos si nos das la tabla de índices.
+      for (int i = 0; i < NUM_LEDS; i++) {
+        float u = (NUM_LEDS > 1) ? (float)i / (float)(NUM_LEDS - 1) : 0.0f;
+
+        // Distancia "hacia atrás" desde la cabeza (0..1)
+        float dist = cometaHeadPos - u;
+        if (dist < 0.0f) dist += 1.0f;
+
+        if (dist > cometaLength) {
+          // Fuera de la cola: LED apagado
+          leds[i] = CRGB::Black;
+        } else {
+          // Dentro de la cola: t=0 en la cabeza, t=1 en el final de cola
+          float t = (cometaLength > 0.0f) ? (dist / cometaLength) : 1.0f;
+          if (t < 0.0f) t = 0.0f;
+          if (t > 1.0f) t = 1.0f;
+
+          uint8_t tt = (uint8_t)roundf(t * 255.0f);
+          uint16_t cNow = lerpColor565(cometaCfgColorHead565, cometaCfgColorTail565, tt);
+
+          uint8_t r,g,b;
+          color565ToRGB(cNow, r, g, b);
+          leds[i] = CRGB(r, g, b);
+        }
+      }
+
+      FastLED.setBrightness(brightness);
+      FastLED.show();
+    }
+  }
+
 }
