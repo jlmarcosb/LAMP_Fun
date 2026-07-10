@@ -58,7 +58,23 @@ int8_t tzOffsetSteps = 0;  // -4..+4 => -2.0..+2.0 h en pasos 0.5h
 // ----------------- Configuración general -----------------
 
 TFT_eSPI tft;
-CRGB     leds[NUM_LEDS];
+CRGB leds[NUM_LEDS];
+
+// Distribución de anillos de LEDs (orden físico 1..9 en la tira)
+const int RING_COUNT = 9;
+const int ringLen[RING_COUNT]   = { 60, 48, 40, 32, 24, 16, 12, 8, 1 };
+const int ringStart[RING_COUNT] = {
+  0,                     // Aro 1: LEDs 0..59
+  60,                    // Aro 2: 60..107
+  60 + 48,               // Aro 3: 108..147
+  60 + 48 + 40,          // Aro 4: 148..179
+  60 + 48 + 40 + 32,     // Aro 5: 180..203
+  60 + 48 + 40 + 32 + 24,// Aro 6: 204..219
+  60 + 48 + 40 + 32 + 24 + 16,     // Aro 7: 220..231
+  60 + 48 + 40 + 32 + 24 + 16 + 12,// Aro 8: 232..239
+  60 + 48 + 40 + 32 + 24 + 16 + 12 + 8 // Aro 9: 240
+};
+
 Preferences prefs;
 
 bool lampOn = true;
@@ -3858,9 +3874,7 @@ void loop() {
   // --- Actualizar efecto COMETA si está activo ---
   if (lampOn && cometaEffectActive) {
     unsigned long now = millis();
-    if (now == cometaLastUpdate) {
-      // Nada de tiempo transcurrido, no hacemos trabajo
-    } else {
+    if (now != cometaLastUpdate) {
       float dt = (float)(now - cometaLastUpdate);
       cometaLastUpdate = now;
 
@@ -3868,49 +3882,97 @@ void loop() {
       float cicloMs = cometaCicloSegundos * 1000.0f;
       if (cicloMs < 10.0f) cicloMs = 10.0f;
 
-      // Avance de cabeza en fracción de vuelta
+      // Avance de la cabeza en fracción de vuelta global
       float deltaHead = dt / cicloMs;
       cometaHeadPos += deltaHead;
-      // Envolver a 0..1
       cometaHeadPos -= floorf(cometaHeadPos);
       if (cometaHeadPos < 0.0f) cometaHeadPos += 1.0f;
       if (cometaHeadPos > 1.0f) cometaHeadPos -= 1.0f;
 
-      // Para simplificar: tiramos de una distribución lineal 0..1 a lo largo de toda la tira.
-      // Más adelante podemos mapear por anillos concretos si nos das la tabla de índices.
+      // Limpiar todos los LEDs (fondo negro para COMETA)
       for (int i = 0; i < NUM_LEDS; i++) {
-        float u = (NUM_LEDS > 1) ? (float)i / (float)(NUM_LEDS - 1) : 0.0f;
+        leds[i] = CRGB::Black;
+      }
 
-        // Distancia "hacia atrás" desde la cabeza (0..1)
-        float dist = cometaHeadPos - u;
-        if (dist < 0.0f) dist += 1.0f;
+      // Fases de 3 aros:
+      // F0: 1-2-3
+      // F1: 2-3-4
+      // F2: 3-4-5
+      // F3: 4-5-6
+      // F4: 5-6-7
+      // F5: 6-7-8
+      // F6: 7-8-9
+      const int GROUP_COUNT = 7;
+      const int groupRingA[GROUP_COUNT] = { 0, 1, 2, 3, 4, 5, 6 }; // aro "bajo"
+      const int groupRingB[GROUP_COUNT] = { 1, 2, 3, 4, 5, 6, 7 }; // aro central
+      const int groupRingC[GROUP_COUNT] = { 2, 3, 4, 5, 6, 7, 8 }; // aro "alto"
 
-        if (dist > cometaLength) {
-          // Fuera de la cola: LED apagado
-          leds[i] = CRGB::Black;
-        } else {
+      // Posición de la cabeza en el ciclo de 0..1, mapeada a 7 fases
+      float phase = cometaHeadPos * (float)GROUP_COUNT;
+      int   phaseIdx = (int)floorf(phase);      // 0..6
+      float phaseFrac = phase - (float)phaseIdx;// 0..1 dentro de la fase
+
+      if (phaseIdx < 0) phaseIdx = 0;
+      if (phaseIdx >= GROUP_COUNT) phaseIdx = GROUP_COUNT - 1;
+
+      int ringA = groupRingA[phaseIdx];
+      int ringB = groupRingB[phaseIdx]; // centro (punta)
+      int ringC = groupRingC[phaseIdx];
+
+      // Procesamos solo los 3 aros de esta fase: A, B (centro), C
+      int rings[3] = { ringA, ringB, ringC };
+
+      for (int ri = 0; ri < 3; ri++) {
+        int r = rings[ri];
+        int start = ringStart[r];
+        int len   = ringLen[r];
+        if (len <= 0) continue;
+
+        // ¿Es el aro central del grupo?
+        bool isCenterRing = (r == ringB);
+
+        for (int k = 0; k < len; k++) {
+          int idxLed = start + k;
+
+          // u = ángulo local 0..1 a lo largo del aro, sentido horario
+          float u = (float)k / (float)len;
+
+          // Distancia "hacia atrás" desde la cabeza dentro de esta fase
+          float dist = phaseFrac - u;
+          if (dist < 0.0f) dist += 1.0f;
+
+          if (dist > cometaLength) {
+            // Fuera de la cola: se queda apagado
+            continue;
+          }
+
           // Dentro de la cola: t=0 en la cabeza, t=1 en el final de cola
           float t = (cometaLength > 0.0f) ? (dist / cometaLength) : 1.0f;
           if (t < 0.0f) t = 0.0f;
           if (t > 1.0f) t = 1.0f;
 
-          // Interpolación lineal de color entre cabeza (t=0) y cola (t=1)
+          // Hacer la cabeza "en punta": solo el aro central puede tener t=0.
+          // En los aros A y C, forzamos t>0 para que nunca haya cabeza pura.
+          if (!isCenterRing && t < 0.08f) {
+            t = 0.08f; // mínimo para que sea solo cola suave
+          }
 
+          // Interpolación de color entre cabeza y cola
           uint8_t tt = (uint8_t)roundf(t * 255.0f);
           uint16_t cNow = lerpColor565(cometaCfgColorHead565, cometaCfgColorTail565, tt);
 
-          // Curva de brillo: cabeza más brillante, cola se desvanece
-          // bFactor = 1 - t^2 -> 1 en la cabeza, 0 en el final de cola, de forma no lineal
+          // Curva de brillo: cabeza más brillante, cola se va apagando
           float bFactor = 1.0f - (t * t);
           if (bFactor < 0.0f) bFactor = 0.0f;
           if (bFactor > 1.0f) bFactor = 1.0f;
 
-          uint8_t r,g,b;
-          color565ToRGB(cNow, r, g, b);
-          r = (uint8_t)(r * bFactor);
-          g = (uint8_t)(g * bFactor);
-          b = (uint8_t)(b * bFactor);
-          leds[i] = CRGB(r, g, b);
+          uint8_t rCol, gCol, bCol;
+          color565ToRGB(cNow, rCol, gCol, bCol);
+          rCol = (uint8_t)(rCol * bFactor);
+          gCol = (uint8_t)(gCol * bFactor);
+          bCol = (uint8_t)(bCol * bFactor);
+
+          leds[idxLed] = CRGB(rCol, gCol, bCol);
         }
       }
 
