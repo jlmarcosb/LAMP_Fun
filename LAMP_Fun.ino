@@ -514,7 +514,12 @@ void startRespEffect() {
 // Detiene el efecto RESPIRACION
 void stopRespEffect() {
   respEffectActive = false;
-  // Opcional: restaurar color fijo actual
+  // Apagar completamente todos los LEDs antes de restaurar Luz
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+  // Ahora estaurar la configuración fija de Luz
   updateLeds();
 }
 
@@ -535,6 +540,14 @@ void startCometaEffect() {
 // Detiene el efecto COMETA y restaura la luz fija
 void stopCometaEffect() {
   cometaEffectActive = false;
+
+  // Apagar completamente todos los LEDs antes de restaurar Luz
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+
+  // Ahora restaurar la configuración fija de Luz
   updateLeds();
 }
 
@@ -3881,11 +3894,22 @@ void loop() {
           if (t < 0.0f) t = 0.0f;
           if (t > 1.0f) t = 1.0f;
 
+          // Interpolación lineal de color entre cabeza (t=0) y cola (t=1)
+
           uint8_t tt = (uint8_t)roundf(t * 255.0f);
           uint16_t cNow = lerpColor565(cometaCfgColorHead565, cometaCfgColorTail565, tt);
 
+          // Curva de brillo: cabeza más brillante, cola se desvanece
+          // bFactor = 1 - t^2 -> 1 en la cabeza, 0 en el final de cola, de forma no lineal
+          float bFactor = 1.0f - (t * t);
+          if (bFactor < 0.0f) bFactor = 0.0f;
+          if (bFactor > 1.0f) bFactor = 1.0f;
+
           uint8_t r,g,b;
           color565ToRGB(cNow, r, g, b);
+          r = (uint8_t)(r * bFactor);
+          g = (uint8_t)(g * bFactor);
+          b = (uint8_t)(b * bFactor);
           leds[i] = CRGB(r, g, b);
         }
       }
