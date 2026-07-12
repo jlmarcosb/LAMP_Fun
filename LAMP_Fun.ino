@@ -60,6 +60,13 @@ int8_t tzOffsetSteps = 0;  // -4..+4 => -2.0..+2.0 h en pasos 0.5h
 TFT_eSPI tft;
 CRGB leds[NUM_LEDS];
 
+void clearAllLedsAndShow() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+}
+
 // Distribución de anillos de LEDs (orden físico 1..9 en la tira)
 const int RING_COUNT = 9;
 const int ringLen[RING_COUNT]   = { 60, 48, 40, 32, 24, 16, 12, 8, 1 };
@@ -555,13 +562,6 @@ bool wifiConnectUsingStored(uint16_t timeoutMs = 5000) {
 }
 
 // ----------------- LEDs -----------------
-
-void clearAllLedsAndShow() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = CRGB::Black;
-  }
-  FastLED.show();
-}
 
 void updateLeds() {
   if (!lampOn) {
