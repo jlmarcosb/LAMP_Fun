@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.5.2
+// LAMP_Fun V.2.5.3
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -149,7 +149,7 @@ uint16_t analogFaceFillColor  = TFT_BLACK;
 
 bool firstManualBoot = false;
 
-// --------- Efecto COMETA (V.2.5.2) ---------
+// --------- Efecto COMETA (V.2.5.3) ---------
 
 // Estado de ejecución
 bool cometaEffectActive   = false;
@@ -195,6 +195,59 @@ const float COMETA_CICLO_VALUES[COMETA_CICLO_COUNT] = {
 int   cometaCicloIndex    = 4;         // por defecto 1.5 s por vuelta
 float cometaCicloSegundos = 1.5f;
 
+// --------- Efecto CUADRANTE (V.2.5.3) ---------
+
+// Estado de ejecución
+bool cuadranteEffectActive   = false;
+unsigned long cuadranteLastUpdate = 0;
+
+// Índice del cuadrante actual (0..3: 1º, 2º, 3º, 4º)
+uint8_t cuadranteIndex = 0;
+
+// Progreso radial dentro del cuadrante actual (0.0 = centro, 1.0 = aro exterior)
+float cuadranteProgress = 0.0f;
+
+// Config persistente del efecto (guardada en NVS)
+// color inicial = color de la "cabeza" que sale del centro
+// color final   = color en el exterior antes de apagarse
+uint16_t cuadranteCfgColorIni565 = TFT_BLACK;
+uint16_t cuadranteCfgColorFin565 = TFT_WHITE;
+uint8_t  cuadranteCfgCicloIndex  = 4;  // índice por defecto en CUADRANTE_CICLO_VALUES
+
+// Estado de la pantalla de configuración CUADRANTE
+enum CuadranteConfigStep {
+  CUAD_STEP_COLOR_INICIAL = 0,
+  CUAD_STEP_COLOR_FINAL,
+  CUAD_STEP_CICLO,
+  CUAD_STEP_INICIAR
+};
+
+CuadranteConfigStep cuadranteStep = CUAD_STEP_COLOR_INICIAL;
+
+// Estado visual de sliders para CUADRANTE
+uint8_t  cuadranteSliderPosInicial = 0;   // 0..255, knob izquierdo (color inicial)
+uint8_t  cuadranteSliderPosFinal   = 255; // 0..255, knob derecho  (color final)
+
+uint16_t cuadranteColorIniPreview  = 0;   // color actual del knob inicial
+uint16_t cuadranteColorFinPreview  = 0;   // color actual del knob final
+
+uint16_t cuadranteColorIniSaved    = 0;   // color confirmado para caja izquierda
+uint16_t cuadranteColorFinSaved    = 0;   // color confirmado para caja derecha
+
+// Tabla de valores de ciclo (segundos por recorrido completo de 4 cuadrantes)
+// NUMÉRICAMENTE iguales a COMETA, pero independientes
+const int CUADRANTE_CICLO_COUNT = 12;
+const float CUADRANTE_CICLO_VALUES[CUADRANTE_CICLO_COUNT] = {
+  0.3f, 0.5f, 0.7f,
+  1.0f, 1.5f, 2.0f,
+  3.0f, 4.0f, 5.0f,
+  7.0f, 8.0f, 10.0f
+};
+
+// Índice actual y valor visible del ciclo
+int   cuadranteCicloIndex    = 4;
+float cuadranteCicloSegundos = 1.5f;
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -238,6 +291,7 @@ enum Screen {
   SCREEN_SETTINGS_LAMP,
   SCREEN_SETTINGS_LAMP_CONFIG,
   SCREEN_SETTINGS_COMETA_CONFIG,
+  SCREEN_SETTINGS_CUADRANTE_CONFIG,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -332,6 +386,12 @@ void loadConfig() {
   cometaCfgCicloIndex   = prefs.getUChar ("cmCIdx", 4);
   if (cometaCfgCicloIndex >= COMETA_CICLO_COUNT) cometaCfgCicloIndex = 4;
 
+  // Config CUADRANTE (independiente de COMETA)
+  cuadranteCfgColorIni565 = prefs.getUShort("cqIni", TFT_BLACK);
+  cuadranteCfgColorFin565 = prefs.getUShort("cqFin", TFT_WHITE);
+  cuadranteCfgCicloIndex  = prefs.getUChar ("cqCIdx", 4);
+  if (cuadranteCfgCicloIndex >= CUADRANTE_CICLO_COUNT) cuadranteCfgCicloIndex = 4;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -343,8 +403,12 @@ void loadConfig() {
 
   // Inicializar valor visible del ciclo COMETA a partir del índice cargado
   cometaCicloIndex    = cometaCfgCicloIndex;
+  if (cometaCicloIndex >= COMETA_CICLO_COUNT) cometaCicloIndex = 4;
   cometaCicloSegundos = COMETA_CICLO_VALUES[cometaCicloIndex];
 
+  cuadranteCicloIndex = cuadranteCfgCicloIndex;
+  if (cuadranteCicloIndex >= CUADRANTE_CICLO_COUNT) cuadranteCicloIndex = 4;
+  cuadranteCicloSegundos = CUADRANTE_CICLO_VALUES[cuadranteCicloIndex];
 
   firstManualBoot = !useAutoTime;
 }
@@ -384,6 +448,11 @@ void saveConfigBasic() {
   prefs.putUShort("cmHead", cometaCfgColorHead565);
   prefs.putUShort("cmTail", cometaCfgColorTail565);
   prefs.putUChar ("cmCIdx", cometaCfgCicloIndex);
+
+  // Config CUADRANTE
+  prefs.putUShort("cqIni", cuadranteCfgColorIni565);
+  prefs.putUShort("cqFin", cuadranteCfgColorFin565);
+  prefs.putUChar ("cqCIdx", cuadranteCfgCicloIndex);
 
   prefs.end();
 }
@@ -487,6 +556,13 @@ bool wifiConnectUsingStored(uint16_t timeoutMs = 5000) {
 
 // ----------------- LEDs -----------------
 
+void clearAllLedsAndShow() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+}
+
 void updateLeds() {
   if (!lampOn) {
     fill_solid(leds, NUM_LEDS, CRGB::Black);
@@ -530,12 +606,7 @@ void startRespEffect() {
 // Detiene el efecto RESPIRACION
 void stopRespEffect() {
   respEffectActive = false;
-  // Apagar completamente todos los LEDs antes de restaurar Luz
-  for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = CRGB::Black;
-  }
-  FastLED.show();
-  // Ahora estaurar la configuración fija de Luz
+  clearAllLedsAndShow();
   updateLeds();
 }
 
@@ -556,14 +627,27 @@ void startCometaEffect() {
 // Detiene el efecto COMETA y restaura la luz fija
 void stopCometaEffect() {
   cometaEffectActive = false;
+  clearAllLedsAndShow();
+  updateLeds();
+}
 
-  // Apagar completamente todos los LEDs antes de restaurar Luz
-  for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = CRGB::Black;
-  }
-  FastLED.show();
+void startCuadranteEffect() {
+  // Asegurarse de que otros efectos de LEDs están parados
+  respEffectActive    = false;
+  cometaEffectActive  = false;
+  rainbowMode         = false;
 
-  // Ahora restaurar la configuración fija de Luz
+  cuadranteEffectActive = true;
+  cuadranteLastUpdate   = millis();
+
+  // Empezamos por el primer cuadrante (entre 12 y 3)
+  cuadranteIndex    = 0;
+  cuadranteProgress = 0.0f;
+}
+
+void stopCuadranteEffect() {
+  cuadranteEffectActive = false;
+  clearAllLedsAndShow();
   updateLeds();
 }
 
@@ -684,7 +768,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.5.2", 120, 85);
+  tft.drawString("V.2.5.3", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1364,7 +1448,7 @@ int resetConfirmIndex = 1; // 0 = SI, 1 = NO
 int settingsLampIndex = 0;
 const int SETTINGS_LAMP_ITEMS = 1; // de momento solo RESPIRACION
 
-int efectosMenuIndex = 0;   // 0 = RESPIRACION, 1 = COMETA (más adelante se pueden añadir más)
+int efectosMenuIndex = 0;   // 0 = RESPIRACION, 1 = COMETA, 2 = CUADRANTE
 
 enum DateTimeField {
   FIELD_HOUR = 0,
@@ -1853,6 +1937,177 @@ void drawCometaConfigScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
+void drawCuadranteConfigScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars    = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("CUADRANTE", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // --- Slider de color (igual que RESPIRACION/COMETA) ---
+
+  int sx = 20;
+  int sy = 70;
+  int sw = 200;
+  int sh = 20;
+
+  // Marco del slider
+  tft.drawRect(sx, sy, sw, sh, TFT_WHITE);
+  tft.fillRect(sx + 1, sy + 1, sw - 2, sh - 2, TFT_BLACK);
+
+  // Paleta completa dentro del slider
+  for (int x = 0; x < sw; x++) {
+    float    ratio = (float)x / (float)(sw - 1);
+    uint8_t  pos   = (uint8_t)roundf(ratio * 255.0f);
+    uint8_t  r,g,b;
+    uint16_t c     = colorFromSlider(pos, r, g, b);
+    tft.drawFastVLine(sx + x, sy + 1, sh - 2, c);
+  }
+
+  // Marcas N/B
+  int markHeight = 12;
+  int markYTop   = sy - markHeight - 6;
+
+  int xLeftMark = sx;
+  tft.drawLine(xLeftMark, markYTop, xLeftMark, markYTop + markHeight, TFT_WHITE);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", xLeftMark, markYTop - 12);
+
+  int xRightMark = sx + sw - 1;
+  tft.drawLine(xRightMark, markYTop, xRightMark, markYTop + markHeight, TFT_WHITE);
+  tft.drawString("B", xRightMark, markYTop - 12);
+
+  // --- Knobs ---
+
+  int knobXInicial = sx + 1 + (int)((cuadranteSliderPosInicial / 255.0f) * (sw - 4));
+  if (knobXInicial < sx + 1)       knobXInicial = sx + 1;
+  if (knobXInicial > sx + sw - 3)  knobXInicial = sx + sw - 3;
+
+  int knobXFinal = sx + 1 + (int)((cuadranteSliderPosFinal / 255.0f) * (sw - 4));
+  if (knobXFinal < sx + 1)       knobXFinal = sx + 1;
+  if (knobXFinal > sx + sw - 3)  knobXFinal = sx + sw - 3;
+
+  uint8_t rN, gN, bN;
+  uint8_t rB, gB, bB;
+  cuadranteColorIniPreview = colorFromSlider(cuadranteSliderPosInicial, rN, gN, bN);
+  cuadranteColorFinPreview = colorFromSlider(cuadranteSliderPosFinal,   rB, gB, bB);
+
+  int knobBallR = 7;
+  int knobBallY = sy - knobBallR - 5;
+
+  tft.fillCircle(knobXInicial, knobBallY, knobBallR, cuadranteColorIniPreview);
+  tft.drawCircle(knobXInicial, knobBallY, knobBallR, TFT_WHITE);
+
+  tft.fillCircle(knobXFinal, knobBallY, knobBallR, cuadranteColorFinPreview);
+  tft.drawCircle(knobXFinal, knobBallY, knobBallR, TFT_WHITE);
+
+  // --- Valores RGB del color activo ---
+
+  uint8_t rSel = 0, gSel = 0, bSel = 0;
+
+  if (cuadranteStep == CUAD_STEP_COLOR_FINAL ||
+      cuadranteStep == CUAD_STEP_CICLO ||
+      cuadranteStep == CUAD_STEP_INICIAR) {
+    rSel = rB; gSel = gB; bSel = bB;
+  } else {
+    rSel = rN; gSel = gN; bSel = bN;
+  }
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+
+  char buf[32];
+  int rgbY = sy + sh + 20;
+
+  char partR[8], partG[8], partB[8];
+  snprintf(partR, sizeof(partR), "R:%d", rSel);
+  snprintf(partG, sizeof(partG), "G:%d", gSel);
+  snprintf(partB, sizeof(partB), "B:%d", bSel);
+
+  snprintf(buf, sizeof(buf), "%s %s %s", partR, partG, partB);
+  tft.drawString(buf, 120, rgbY);
+
+  // --- Cajas de color inicial y final ---
+
+  int boxY    = rgbY + 26;
+  int boxW    = 80;
+  int boxH    = 24;
+  int boxGap  = 20;
+
+  int totalBoxesWidth = boxW * 2 + boxGap;
+  int boxXIni = (240 - totalBoxesWidth) / 2;
+  int boxXFin = boxXIni + boxW + boxGap;
+
+  tft.fillRect(boxXIni, boxY, boxW, boxH, TFT_BLACK);
+  tft.fillRect(boxXFin, boxY, boxW, boxH, TFT_BLACK);
+
+  uint16_t cIni = (cuadranteColorIniSaved != 0) ? cuadranteColorIniSaved : cuadranteColorIniPreview;
+  uint16_t cFin = (cuadranteColorFinSaved != 0) ? cuadranteColorFinSaved : cuadranteColorFinPreview;
+
+  tft.fillRect(boxXIni + 1, boxY + 1, boxW - 2, boxH - 2, cIni);
+  tft.fillRect(boxXFin + 1, boxY + 1, boxW - 2, boxH - 2, cFin);
+
+  tft.drawRect(boxXIni, boxY, boxW, boxH, TFT_WHITE);
+  tft.drawRect(boxXFin, boxY, boxW, boxH, TFT_WHITE);
+
+  // Flechas de foco
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  if (cuadranteStep == CUAD_STEP_COLOR_INICIAL) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", boxXIni - 4, boxY + boxH / 2);
+  } else if (cuadranteStep == CUAD_STEP_COLOR_FINAL) {
+    tft.setTextDatum(ML_DATUM);
+    tft.drawString("<", boxXFin + boxW + 4, boxY + boxH / 2);
+  }
+
+  // --- Línea de Ciclo ---
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  int cicloY = boxY + boxH + 26;
+  char bufC[24];
+  snprintf(bufC, sizeof(bufC), "Ciclo: %.1f s", cuadranteCicloSegundos);
+
+  if (cuadranteStep == CUAD_STEP_CICLO) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 40, cicloY);
+  }
+
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(bufC, 120, cicloY);
+
+  // --- Botón "Iniciar" ---
+
+  int btnW = 120;
+  int btnH = 32;
+  int btnX = (240 - btnW) / 2;
+  int btnY = 200;
+
+  bool selIniciar = (cuadranteStep == CUAD_STEP_INICIAR);
+
+  uint16_t bgBtn = selIniciar ? TFT_DARKGREY : TFT_BLACK;
+  uint16_t fgBtn = selIniciar ? TFT_NAVY     : TFT_WHITE;
+
+  tft.fillRect(btnX, btnY, btnW, btnH, bgBtn);
+  tft.setTextColor(fgBtn, bgBtn);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
+}
+
 // ---------- Submenú Efectos ----------
 
 void drawSettingsLampScreen() {
@@ -1864,7 +2119,7 @@ void drawSettingsLampScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos", 120, 15);
+  tft.drawString("Efectos luz", 120, 15);
 
   drawWifiSignalIcon();
 
@@ -1873,15 +2128,16 @@ void drawSettingsLampScreen() {
 
   const char* lines[] = {
     "RESPIRACION",
-    "COMETA"
+    "COMETA",
+    "CUADRANTE"
   };
-  const int items = 2;
+  const int items = 3;
 
-  int startY = 80;
+  int startY = 60;
   int lineH  = 24;
 
   for (int i = 0; i < items; i++) {
-    int  y = startY + i * lineH;
+    int y = startY + i * lineH;
     bool selected = (i == efectosMenuIndex);
 
     if (selected) {
@@ -2694,7 +2950,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.5.2",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.5.3",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -2825,6 +3081,9 @@ void loop() {
         if (cometaEffectActive) {
           stopCometaEffect();
         }
+        if (cuadranteEffectActive){
+          stopCuadranteEffect();
+        }
         currentScreen = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar = false;
@@ -2838,6 +3097,9 @@ void loop() {
         }
         if (cometaEffectActive) {
           stopCometaEffect();
+        }
+        if (cuadranteEffectActive) {
+          stopCuadranteEffect();
         }
         settingsMainIndex = 0;
         currentScreen = SCREEN_SETTINGS_MAIN;
@@ -3231,22 +3493,21 @@ void loop() {
     }
     
     case SCREEN_SETTINGS_LAMP: {
-      // Menú de Efectos (RESPIRACION / COMETA)
+      // Menú de efectos de luz: RESPIRACION, COMETA, CUADRANTE
 
       if (stepDir != 0) {
         int delta = (stepDir > 0 ? 1 : -1);
         efectosMenuIndex += delta;
-        if (efectosMenuIndex < 0) efectosMenuIndex = 1;
-        if (efectosMenuIndex > 1) efectosMenuIndex = 0;
+        if (efectosMenuIndex < 0) efectosMenuIndex = 2;
+        if (efectosMenuIndex > 2) efectosMenuIndex = 0;
         drawSettingsLampScreen();
       }
 
       if (encButtonFalling) {
         if (efectosMenuIndex == 0) {
-          // Entrar en CONFIG de RESPIRACION
+          // RESPIRACION
           respiracionStep = RESP_STEP_COLOR_INICIAL;
 
-          // Inicializar sliders con config RESPIRACION almacenada
           respSliderPosInicial = sliderPosFromColor(respCfgColorIni565);
           respColorInicialSaved = respCfgColorIni565;
 
@@ -3259,11 +3520,11 @@ void loop() {
 
           currentScreen = SCREEN_SETTINGS_LAMP_CONFIG;
           drawRespiracionConfigScreen();
-        } else if (efectosMenuIndex == 1) {
-          // Entrar en CONFIG de COMETA
+        }
+        else if (efectosMenuIndex == 1) {
+          // COMETA
           cometaStep = COMETA_STEP_COLOR_INICIAL;
 
-          // Inicializar sliders con config COMETA almacenada
           cometaSliderPosInicial = sliderPosFromColor(cometaCfgColorHead565);
           cometaColorHeadSaved   = cometaCfgColorHead565;
 
@@ -3276,6 +3537,23 @@ void loop() {
 
           currentScreen = SCREEN_SETTINGS_COMETA_CONFIG;
           drawCometaConfigScreen();
+        }
+        else if (efectosMenuIndex == 2) {
+          // CUADRANTE
+          cuadranteStep = CUAD_STEP_COLOR_INICIAL;
+
+          cuadranteSliderPosInicial = sliderPosFromColor(cuadranteCfgColorIni565);
+          cuadranteColorIniSaved    = cuadranteCfgColorIni565;
+
+          cuadranteSliderPosFinal   = sliderPosFromColor(cuadranteCfgColorFin565);
+          cuadranteColorFinSaved    = cuadranteCfgColorFin565;
+
+          cuadranteCicloIndex    = cuadranteCfgCicloIndex;
+          if (cuadranteCicloIndex >= CUADRANTE_CICLO_COUNT) cuadranteCicloIndex = 4;
+          cuadranteCicloSegundos = CUADRANTE_CICLO_VALUES[cuadranteCicloIndex];
+
+          currentScreen = SCREEN_SETTINGS_CUADRANTE_CONFIG;
+          drawCuadranteConfigScreen();
         }
       }
 
@@ -3452,6 +3730,85 @@ void loop() {
       }
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al menú Efectos
+      if (btn2Falling) {
+        currentScreen = SCREEN_SETTINGS_LAMP;
+        drawSettingsLampScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_CUADRANTE_CONFIG: {
+      // Pantalla de configuración del efecto CUADRANTE.
+
+      // 1) Manejo del encoder
+      if (stepDir != 0) {
+        int delta = (stepDir > 0 ? 5 : -5);
+
+        if (cuadranteStep == CUAD_STEP_COLOR_INICIAL) {
+          int v = (int)cuadranteSliderPosInicial + delta;
+          if (v < 0)   v = 0;
+          if (v > 255) v = 255;
+          cuadranteSliderPosInicial = (uint8_t)v;
+          drawCuadranteConfigScreen();
+        }
+        else if (cuadranteStep == CUAD_STEP_COLOR_FINAL) {
+          int v = (int)cuadranteSliderPosFinal + delta;
+          if (v < 0)   v = 0;
+          if (v > 255) v = 255;
+          cuadranteSliderPosFinal = (uint8_t)v;
+          drawCuadranteConfigScreen();
+        }
+        else if (cuadranteStep == CUAD_STEP_CICLO) {
+          int step = (stepDir > 0 ? 1 : -1);
+          int idx  = cuadranteCicloIndex + step;
+
+          if (idx < 0) idx = 0;
+          if (idx >= CUADRANTE_CICLO_COUNT) idx = CUADRANTE_CICLO_COUNT - 1;
+
+          if (idx != cuadranteCicloIndex) {
+            cuadranteCicloIndex    = idx;
+            cuadranteCicloSegundos = CUADRANTE_CICLO_VALUES[cuadranteCicloIndex];
+            drawCuadranteConfigScreen();
+          }
+        }
+      }
+
+      // 2) Pulsación del encoder
+      if (encButtonFalling) {
+        if (cuadranteStep == CUAD_STEP_COLOR_INICIAL) {
+          uint8_t rN, gN, bN;
+          cuadranteColorIniSaved = colorFromSlider(cuadranteSliderPosInicial, rN, gN, bN);
+          cuadranteStep = CUAD_STEP_COLOR_FINAL;
+          drawCuadranteConfigScreen();
+        }
+        else if (cuadranteStep == CUAD_STEP_COLOR_FINAL) {
+          uint8_t rB, gB, bB;
+          cuadranteColorFinSaved = colorFromSlider(cuadranteSliderPosFinal, rB, gB, bB);
+          cuadranteStep = CUAD_STEP_CICLO;
+          drawCuadranteConfigScreen();
+        }
+        else if (cuadranteStep == CUAD_STEP_CICLO) {
+          cuadranteStep = CUAD_STEP_INICIAR;
+          drawCuadranteConfigScreen();
+        }
+        else if (cuadranteStep == CUAD_STEP_INICIAR) {
+          // Guardar config CUADRANTE en NVS
+          cuadranteCfgColorIni565 = cuadranteColorIniSaved;
+          cuadranteCfgColorFin565 = cuadranteColorFinSaved;
+          cuadranteCfgCicloIndex  = (uint8_t)cuadranteCicloIndex;
+          saveConfigBasic();
+
+          // Iniciar efecto CUADRANTE (lo implementaremos en el siguiente paso)
+          startCuadranteEffect();
+
+          // Ir al reloj
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        }
+      }
+
+      // 3) Botón 2 = salir SIN guardar cambios: volver al menú Efectos
       if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
@@ -3966,6 +4323,139 @@ void loop() {
           if (bFactor < 0.0f) bFactor = 0.0f;
           if (bFactor > 1.0f) bFactor = 1.0f;
 
+          uint8_t rCol, gCol, bCol;
+          color565ToRGB(cNow, rCol, gCol, bCol);
+          rCol = (uint8_t)(rCol * bFactor);
+          gCol = (uint8_t)(gCol * bFactor);
+          bCol = (uint8_t)(bCol * bFactor);
+
+          leds[idxLed] = CRGB(rCol, gCol, bCol);
+        }
+      }
+
+      FastLED.setBrightness(brightness);
+      FastLED.show();
+    }
+  }
+
+  // --- Actualizar efecto CUADRANTE si está activo ---
+  if (lampOn && cuadranteEffectActive) {
+    unsigned long now = millis();
+    if (now != cuadranteLastUpdate) {
+      float dt = (float)(now - cuadranteLastUpdate);
+      cuadranteLastUpdate = now;
+
+      // Tiempo total para recorrer los 4 cuadrantes = cuadranteCicloSegundos
+      float totalMs = cuadranteCicloSegundos * 1000.0f;
+      if (totalMs < 40.0f) totalMs = 40.0f;
+      float cuadranteMs = totalMs / 4.0f;
+      if (cuadranteMs < 10.0f) cuadranteMs = 10.0f;
+
+      // Progreso 0..1 dentro del cuadrante actual
+      float p = cuadranteProgress + dt / cuadranteMs;
+      if (p >= 1.0f) {
+        p -= 1.0f;
+        cuadranteIndex = (cuadranteIndex + 1) & 0x03; // 0..3
+      }
+      cuadranteProgress = p;
+
+      // Limpiar todos los LEDs
+      for (int i = 0; i < NUM_LEDS; i++) {
+        leds[i] = CRGB::Black;
+      }
+
+      // Definición de cuadrantes en grados (después de ajustar a 12 arriba)
+      float qStart = 0.0f;
+      float qEnd   = 90.0f;
+
+      switch (cuadranteIndex) {
+        case 0: // 12 -> 3
+          qStart =   0.0f; qEnd =  90.0f;
+          break;
+        case 1: // 3 -> 6
+          qStart =  90.0f; qEnd = 180.0f;
+          break;
+        case 2: // 6 -> 9
+          qStart = 180.0f; qEnd = 270.0f;
+          break;
+        default: // 9 -> 12
+          qStart = 270.0f; qEnd = 360.0f;
+          break;
+      }
+
+      // Progreso de llenado/vaciado:
+      // - pNorm in [0,1] recorre todo el cuadrante.
+      // - primera mitad (pNorm<0.5): llenado desde centro a exterior
+      // - segunda mitad: vaciado desde centro a exterior
+      float pNorm = p; // ya está 0..1
+      float filledMax;  // radio máximo iluminado (0 centro, 1 exterior)
+      float filledMin;  // radio mínimo iluminado (para vaciado)
+      if (pNorm < 0.5f) {
+        // Llenado: 0->0.5 => filledMax 0->1, filledMin=0
+        float tFill = pNorm / 0.5f;       // 0..1
+        filledMax = tFill;
+        if (filledMax > 1.0f) filledMax = 1.0f;
+        filledMin = 0.0f;
+      } else {
+        // Vaciado: 0.5->1 => filledMin 0->1, filledMax=1
+        float tEmpty = (pNorm - 0.5f) / 0.5f; // 0..1
+        if (tEmpty > 1.0f) tEmpty = 1.0f;
+        filledMax = 1.0f;
+        filledMin = tEmpty;
+      }
+
+      // Recorremos todos los anillos (0=aro1 exterior .. 8=aro9 centro)
+      for (int r = 0; r < RING_COUNT; r++) {
+        int start = ringStart[r];
+        int len   = ringLen[r];
+        if (len <= 0) continue;
+
+        int ringIndexFromOutside = r;                 // 0..8
+        int ringIndexFromCenter  = (RING_COUNT - 1) - ringIndexFromOutside; // 8..0
+        float ringRadiusNorm = (float)ringIndexFromCenter / (float)(RING_COUNT - 1);
+        // ringRadiusNorm = 0 en centro (aro9), 1 en exterior (aro1)
+
+        // ¿Este aro está dentro de la banda iluminada actual?
+        if (ringRadiusNorm < filledMin || ringRadiusNorm > filledMax) {
+          continue;
+        }
+
+        // tRadial = 0 en borde exterior (color inicial), 1 en centro (color final)
+        float tRadial = ringRadiusNorm; // ya va 0 centro ->1 exterior, invertimos:
+        tRadial = 1.0f - tRadial;       // 0 en centro, 1 en exterior
+        // Para que cumpla: centro = color final, exterior = color inicial
+        // así que usamos 1-tRadial como interpolante hacia color final
+        if (tRadial < 0.0f) tRadial = 0.0f;
+        if (tRadial > 1.0f) tRadial = 1.0f;
+
+        for (int k = 0; k < len; k++) {
+          int idxLed = start + k;
+
+          // Ángulo local de este LED
+          float angle = (2.0f * 3.1415926f * (float)k) / (float)len;
+          float adj   = angle - 3.1415926f / 2.0f; // 0 rad en 12
+
+          // Pasar a grados 0..360
+          float deg = adj * (180.0f / 3.1415926f);
+          while (deg < 0.0f)    deg += 360.0f;
+          while (deg >= 360.0f) deg -= 360.0f;
+
+          // ¿Está este LED dentro del cuadrante actual?
+          bool inQuad = false;
+          if (qStart <= qEnd) {
+            inQuad = (deg >= qStart && deg < qEnd);
+          } else {
+            inQuad = (deg >= qStart || deg < qEnd);
+          }
+          if (!inQuad) continue;
+
+          // Interpolación de color radial: 0=cabeza (exterior, color inicial), 1=cola (centro, color final)
+          uint8_t tt = (uint8_t)roundf(tRadial * 255.0f);
+          uint16_t cNow = lerpColor565(cuadranteCfgColorIni565, cuadranteCfgColorFin565, tt);
+
+          // Brillo uniforme dentro de la banda; si quisieras, aquí podríamos
+          // añadir una pequeña curva de borde, pero de momento lo dejamos plano.
+          float bFactor = 1.0f;
           uint8_t rCol, gCol, bCol;
           color565ToRGB(cNow, rCol, gCol, bCol);
           rCol = (uint8_t)(rCol * bFactor);
