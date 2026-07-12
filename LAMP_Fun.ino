@@ -91,6 +91,7 @@ uint8_t redValue = 50;
 uint8_t greenValue = 50;
 uint8_t blueValue = 50;
 uint8_t rainbowHue = 0;
+bool anyEffectActive = false;
 
 // --------- Efecto RESPIRACION ---------
 
@@ -597,26 +598,24 @@ uint16_t lerpColor565(uint16_t c1, uint16_t c2, uint8_t t) {
 
 // Inicia el efecto RESPIRACION
 void startRespEffect() {
+  cometaEffectActive = false;
+  cuadranteEffectActive = false;
+  rainbowMode = false;
   respEffectActive  = true;
+  anyEffectActive = true;
   respEffectForward = true;
   respPhase         = 0;
   respLastUpdate    = millis();
-}
-
-// Detiene el efecto RESPIRACION
-void stopRespEffect() {
-  respEffectActive = false;
-  clearAllLedsAndShow();
-  updateLeds();
 }
 
 // Inicia el efecto COMETA
 void startCometaEffect() {
   // Asegurarse de que otros efectos de LEDs están parados
   respEffectActive = false;
+  cuadranteEffectActive = false;
   rainbowMode      = false;
-
   cometaEffectActive = true;
+  anyEffectActive = true;
   cometaHeadPos      = 0.0f;
   cometaLastUpdate   = millis();
 
@@ -624,20 +623,13 @@ void startCometaEffect() {
   cometaLength = 0.25f; // 25% de la vuelta. Ajustable si quieres más corta/larga.
 }
 
-// Detiene el efecto COMETA y restaura la luz fija
-void stopCometaEffect() {
-  cometaEffectActive = false;
-  clearAllLedsAndShow();
-  updateLeds();
-}
-
 void startCuadranteEffect() {
   // Asegurarse de que otros efectos de LEDs están parados
   respEffectActive    = false;
   cometaEffectActive  = false;
   rainbowMode         = false;
-
   cuadranteEffectActive = true;
+  anyEffectActive = true;
   cuadranteLastUpdate   = millis();
 
   // Empezamos por el primer cuadrante (entre 12 y 3)
@@ -645,8 +637,18 @@ void startCuadranteEffect() {
   cuadranteProgress = 0.0f;
 }
 
-void stopCuadranteEffect() {
+void stopAllEffects() {
+  if (!anyEffectActive) {
+    return;  // no hay nada que parar
+  }
+
+  // Desactivar todos los flags de efectos actuales
+  respEffectActive      = false;
+  cometaEffectActive    = false;
   cuadranteEffectActive = false;
+  anyEffectActive       = false;
+
+  // Apagado duro + restaurar Luz
   clearAllLedsAndShow();
   updateLeds();
 }
@@ -3075,15 +3077,7 @@ void loop() {
 
       // 1) Giro de encoder o pulsación encoder -> parar RESPIRACION y pasar a LUZ
       if (stepDir != 0 || encButtonFalling) {
-        if (respEffectActive) {
-          stopRespEffect();   // apaga el efecto y deja los LEDs en el RGB de Luz
-        }
-        if (cometaEffectActive) {
-          stopCometaEffect();
-        }
-        if (cuadranteEffectActive){
-          stopCuadranteEffect();
-        }
+        stopAllEffects();
         currentScreen = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar = false;
@@ -3092,15 +3086,7 @@ void loop() {
 
       // 2) Pulsador 2 -> parar RESPIRACION y pasar a Ajustes
       if (btn2Falling) {
-        if (respEffectActive) {
-          stopRespEffect(); // apaga el efecto y deja los LEDs en el RGB de Luz
-        }
-        if (cometaEffectActive) {
-          stopCometaEffect();
-        }
-        if (cuadranteEffectActive) {
-          stopCuadranteEffect();
-        }
+        stopAllEffects();
         settingsMainIndex = 0;
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
@@ -3174,9 +3160,7 @@ void loop() {
       }
 
       if (btn2Falling) {
-          if (respEffectActive)      stopRespEffect();
-          if (cometaEffectActive)    stopCometaEffect();
-          if (cuadranteEffectActive) stopCuadranteEffect();
+        stopAllEffects();
         currentScreen = SCREEN_CLOCK;
         drawClockScreenFull();
       }
@@ -3561,9 +3545,7 @@ void loop() {
       }
 
       if (btn2Falling) {
-        if (respEffectActive)      stopRespEffect();
-        if (cometaEffectActive)    stopCometaEffect();
-        if (cuadranteEffectActive) stopCuadranteEffect();
+        stopAllEffects();
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3658,9 +3640,7 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos
       if (btn2Falling) {
-        if (respEffectActive) {
-          stopRespEffect();
-        }
+        stopAllEffects();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3740,9 +3720,7 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al menú Efectos
       if (btn2Falling) {
-        if (cometaEffectActive) {
-          stopCometaEffect();
-        }
+        stopAllEffects();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3822,9 +3800,7 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: volver al menú Efectos
       if (btn2Falling) {
-        if (cuadranteEffectActive) {
-          stopCuadranteEffect();
-        }
+        stopAllEffects();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
