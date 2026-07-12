@@ -3174,6 +3174,9 @@ void loop() {
       }
 
       if (btn2Falling) {
+          if (respEffectActive)      stopRespEffect();
+          if (cometaEffectActive)    stopCometaEffect();
+          if (cuadranteEffectActive) stopCuadranteEffect();
         currentScreen = SCREEN_CLOCK;
         drawClockScreenFull();
       }
@@ -3558,6 +3561,9 @@ void loop() {
       }
 
       if (btn2Falling) {
+        if (respEffectActive)      stopRespEffect();
+        if (cometaEffectActive)    stopCometaEffect();
+        if (cuadranteEffectActive) stopCuadranteEffect();
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3652,6 +3658,9 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos
       if (btn2Falling) {
+        if (respEffectActive) {
+          stopRespEffect();
+        }
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3731,6 +3740,9 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al menú Efectos
       if (btn2Falling) {
+        if (cometaEffectActive) {
+          stopCometaEffect();
+        }
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3810,6 +3822,9 @@ void loop() {
 
       // 3) Botón 2 = salir SIN guardar cambios: volver al menú Efectos
       if (btn2Falling) {
+        if (cuadranteEffectActive) {
+          stopCuadranteEffect();
+        }
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
