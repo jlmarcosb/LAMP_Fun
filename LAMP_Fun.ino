@@ -650,7 +650,6 @@ void stopAllEffects() {
 
   // Apagado duro + restaurar Luz
   clearAllLedsAndShow();
-  updateLeds();
 }
 
 // ----------------- Icono WiFi -----------------
@@ -3078,6 +3077,7 @@ void loop() {
       // 1) Giro de encoder o pulsación encoder -> parar RESPIRACION y pasar a LUZ
       if (stepDir != 0 || encButtonFalling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar = false;
@@ -3087,6 +3087,7 @@ void loop() {
       // 2) Pulsador 2 -> parar RESPIRACION y pasar a Ajustes
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         settingsMainIndex = 0;
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
@@ -3161,6 +3162,7 @@ void loop() {
 
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_CLOCK;
         drawClockScreenFull();
       }
@@ -3546,6 +3548,7 @@ void loop() {
 
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3641,6 +3644,7 @@ void loop() {
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al submenú Efectos
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3721,6 +3725,7 @@ void loop() {
       // 3) Botón 2 = salir SIN guardar cambios: vuelve al menú Efectos
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
@@ -3801,6 +3806,7 @@ void loop() {
       // 3) Botón 2 = salir SIN guardar cambios: volver al menú Efectos
       if (btn2Falling) {
         stopAllEffects();
+        updateLeds();
         currentScreen = SCREEN_SETTINGS_LAMP;
         drawSettingsLampScreen();
       }
