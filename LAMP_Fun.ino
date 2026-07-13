@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.4.2
+// LAMP_Fun V.2.6.0
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -68,6 +68,20 @@ uint8_t redValue     = 50;
 uint8_t greenValue   = 50;
 uint8_t blueValue    = 50;
 uint8_t rainbowHue   = 0;
+
+// ----------------- Efectos de luz (infraestructura común) -----------------
+
+// Flag global: hay algún efecto en ejecución
+bool anyEffectActive = false;
+
+// Flags específicos (para RESPIRACION ahora, futuros efectos después)
+bool respEffectActive = false;
+
+// Estado de RESPIRACION
+uint8_t respPhase = 0;           // 0..255 fase de brillo
+bool respEffectForward = true;   // subir/bajar
+unsigned long respLastUpdate = 0;
+uint16_t respIntervalMs = 30;    // velocidad base del efecto (ajustable después)
 
 bool use24hFormat = true;
 bool useAutoTime  = true;
@@ -355,6 +369,88 @@ void updateLeds() {
   FastLED.show();
 }
 
+// Apagado duro de todos los leds
+void clearAllLedsAndShow() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+}
+
+// Parar TODOS los efectos activos y dejar leds en negro
+void stopAllEffects() {
+  if (!anyEffectActive) return;
+
+  // Desactivar flags de efectos actuales
+  respEffectActive  = false;
+  anyEffectActive   = false;
+
+  // Apagado forzoso en hardware
+  clearAllLedsAndShow();
+}
+
+// Iniciar RESPIRACION
+void startRespEffect() {
+  // Asegurarnos de que no quedan otros efectos
+  stopAllEffects();
+
+  respEffectActive  = true;
+  anyEffectActive   = true;
+
+  respEffectForward = true;
+  respPhase         = 0;
+  respLastUpdate    = millis();
+}
+
+// Parar RESPIRACION (usamos infraestructura común)
+void stopRespEffect() {
+  stopAllEffects();
+}
+
+// Actualizar RESPIRACION (se llamará desde loop)
+void updateRespEffect() {
+  if (!respEffectActive) return;
+
+  unsigned long now = millis();
+  if (now - respLastUpdate < respIntervalMs) return;
+  respLastUpdate = now;
+
+  // Fase de 0..255 y vuelta (sube/baja)
+  if (respEffectForward) {
+    if (respPhase >= 255) {
+      respPhase = 255;
+      respEffectForward = false;
+    } else {
+      respPhase++;
+    }
+  } else {
+    if (respPhase == 0) {
+      respEffectForward = true;
+    } else {
+      respPhase--;
+    }
+  }
+
+  // Calcular brillo relativo (0..1) a partir de respPhase
+  float t = respPhase / 255.0f;  // 0..1
+  // Curva tipo seno suave: 0..1..0
+  float b = 0.5f - 0.5f * cosf(t * 3.1415926f);
+  if (b < 0.0f) b = 0.0f;
+  if (b > 1.0f) b = 1.0f;
+
+  // Aplicar a todos los leds usando el color de Luz actual
+  uint8_t r = (uint8_t)(redValue   * b);
+  uint8_t g = (uint8_t)(greenValue * b);
+  uint8_t bch = (uint8_t)(blueValue  * b);
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB(r, g, bch);
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
+}
+
 // ----------------- Icono WiFi -----------------
 
 const int WIFI_ICON_X = 215;
@@ -472,7 +568,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.4.2", 120, 85);
+  tft.drawString("V.2.6.0", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1247,7 +1343,7 @@ void drawSettingsMainScreen() {
   const char* lines[SETTINGS_MAIN_ITEMS] = {
     "Ajustes reloj",
     "Backlight TFT",
-    "Efectos luz",
+    "Efectos",
     "WiFi",
     "Reinicio HW",
     "Acerca de...",
@@ -1761,7 +1857,7 @@ void drawSettingsBacklightScreen() {
   tft.drawString(buf, 120, y + barH + 18);
 }
 
-// ---------- Efectos luz (placeholder + RESPIRACION) ----------
+// ---------- Efectos (placeholder + RESPIRACION) ----------
 
 void drawSettingsLampScreen() {
   tft.fillScreen(TFT_BLACK);
@@ -1772,7 +1868,7 @@ void drawSettingsLampScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos luz", 120, 15);
+  tft.drawString("Efectos", 120, 15);
 
   drawWifiSignalIcon();
 
@@ -2089,7 +2185,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.4.2",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.6.0",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -2213,6 +2309,8 @@ void loop() {
       updateClockScreen();
 
       if (stepDir != 0 || encButtonFalling) {
+        stopAllEffects();
+        updateLeds();
         currentScreen  = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar     = false;
@@ -2611,10 +2709,27 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_LAMP: {
-      if (btn2Falling || encButtonFalling) {
+      if (stepDir != 0) {
+        // si más adelante hay varios efectos, aquí cambiaríamos índice
+      }
+
+      // Pulsar encoder: alternar RESPIRACION ON/OFF
+      if (encButtonFalling) {
+        if (respEffectActive) {
+          stopRespEffect();      // apagado forzoso (negro)
+          // NO llamamos a updateLeds() aquí: lo hará Luz cuando entremos
+        } else {
+          startRespEffect();     // inicia el efecto
+        }
+      }
+
+      // Botón 2: salir a Ajustes, siempre parando efectos
+      if (btn2Falling) {
+        stopAllEffects();        // asegura negro
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
+
       break;
     }
 
@@ -2924,6 +3039,14 @@ void loop() {
 
   lastSw   = sw;
   lastBtn2 = btn2;
+
+  // --- Actualización de efectos (se ejecutan sólo si anyEffectActive == true) ---
+  if (anyEffectActive && lampOn) {
+    if (respEffectActive) {
+      updateRespEffect();
+    }
+    // futuros efectos: else if (otroEffectActive) update...
+  }
 
   if (lampOn && rainbowMode) {
     rainbowHue++;
