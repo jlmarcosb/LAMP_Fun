@@ -83,6 +83,34 @@ bool respEffectForward = true;   // subir/bajar
 unsigned long respLastUpdate = 0;
 uint16_t respIntervalMs = 30;    // velocidad base del efecto (ajustable después)
 
+// Configuración de RESPIRACION
+uint16_t respColorStart = 0x0000;  // negro por defecto
+uint16_t respColorEnd   = 0xFFFF;  // blanco por defecto
+
+// Índice de ciclo: 0..13 => 0.2, 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 s
+uint8_t  respCycleIndex = 4;       // por defecto 1 s (ver tabla más abajo)
+
+// Tabla de duraciones de ciclo para RESPIRACION (en segundos, *10 para evitar float)
+const uint8_t RESP_CYCLE_STEPS = 14;
+const uint16_t respCycleTimesX10[RESP_CYCLE_STEPS] = {
+  2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+}; 
+// Representan: 0.2, 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 s
+
+// Estado de UI para pantalla RESPIRACION
+enum RespFocus {
+  RESP_FOCUS_START = 0,   // knob/color inicial
+  RESP_FOCUS_END,         // knob/color final
+  RESP_FOCUS_CYCLE,       // ciclo
+  RESP_FOCUS_BUTTON       // botón Iniciar
+};
+
+RespFocus respFocus = RESP_FOCUS_START;
+
+// Posiciones de knobs en el slider (0..sliderWidth-1)
+int respKnobStartPos = 0;
+int respKnobEndPos   = 0;
+
 bool use24hFormat = true;
 bool useAutoTime  = true;
 
@@ -217,6 +245,13 @@ void loadConfig() {
   tzIndex       = (int8_t)prefs.getChar("tzIndex", 1);
   tzOffsetSteps = (int8_t)prefs.getChar("tzOff", 0);
 
+  // Config RESPIRACION
+  respColorStart = prefs.getUShort("respC0", 0x0000);  // negro por defecto
+  respColorEnd   = prefs.getUShort("respC1", 0xFFFF);  // blanco por defecto
+  respCycleIndex = prefs.getUChar ("respCi", 4);       // por defecto índice 4 => 1.0 s
+
+  if (respCycleIndex >= RESP_CYCLE_STEPS) respCycleIndex = RESP_CYCLE_STEPS - 1;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -254,6 +289,11 @@ void saveConfigBasic() {
 
   prefs.putChar("tzIndex", (char)tzIndex);
   prefs.putChar("tzOff",   (char)tzOffsetSteps);
+
+  // Config RESPIRACION
+  prefs.putUShort("respC0", respColorStart);
+  prefs.putUShort("respC1", respColorEnd);
+  prefs.putUChar ("respCi", respCycleIndex);
 
   prefs.end();
 }
@@ -1681,6 +1721,16 @@ uint8_t sliderPosFromColor(uint16_t c) {
   return pos;
 }
 
+void initRespSliderPositions() {
+  respKnobStartPos = sliderPosFromColor(respColorStart);
+  respKnobEndPos   = sliderPosFromColor(respColorEnd);
+  if (respKnobEndPos < respKnobStartPos) {
+    int tmp = respKnobStartPos;
+    respKnobStartPos = respKnobEndPos;
+    respKnobEndPos   = tmp;
+  }
+}
+
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
@@ -1870,24 +1920,154 @@ void drawSettingsRespScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos", 120, 15);
+  tft.drawString("RESPIRACION", 120, 15);   // título en mayúsculas
 
   drawWifiSignalIcon();
 
-  // Mensaje informativo arriba
+  // --- Slider de color con dos knobs ---
+
+  // Geometría del slider
+  int sliderX = 14;
+  int sliderY = 60;
+  int sliderW = 212;
+  int sliderH = 16;
+
+  // Inicializar posiciones de knobs a partir de los colores
+  initRespSliderPositions();
+
+  // Dibujar fondo del slider (mismo degradado que en colores de reloj)
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb; 
+    uint16_t c = colorFromSlider((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
+
+  // Líneas "N" y "B" en extremos, más altas que los knobs
+  int markerHeight = 24;
+  tft.drawFastVLine(sliderX, sliderY - markerHeight, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, sliderY - markerHeight, markerHeight, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", sliderX, sliderY - markerHeight - 8);                // izquierda
+  tft.drawString("B", sliderX + sliderW - 1, sliderY - markerHeight - 8);  // derecha
+
+  // Altura donde dibujar las bolitas de los knobs
+  int knobRadius = 5;
+  int knobCenterY = sliderY - 8;
+
+  // Knob inicio (izquierdo)
+  int xStart = sliderX + respKnobStartPos;
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSlider((uint8_t)respKnobStartPos, rr, gg, bb);
+    tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+  }
+
+  // Knob final (derecho)
+  int xEnd = sliderX + respKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSlider((uint8_t)respKnobEndPos, rr, gg, bb);
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c);
+  }
+
+  // --- Texto RGB de knob activo ---
+
+  uint16_t activeColor = (respFocus == RESP_FOCUS_END) ? respColorEnd : respColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
-  tft.setTextDatum(TL_DATUM);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "R:%3d, G:%3d, B:%3d", r, g, b);
+  tft.drawString(buf, 120, sliderY + sliderH + 14);
 
-  // Único ítem por ahora: RESPIRACION
-  int xItem  = 14;
-  int yItem  = 60;
-  int wItem  = 220;
-  int hItem  = 24;
+  // --- Cajitas de color inicio / final ---
 
-  // Como sólo hay un ítem, lo marcamos siempre como seleccionado
-  tft.fillRect(xItem, yItem - 2, wItem, hItem, TFT_DARKGREY);
-  tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
-  tft.drawString("RESPIRACION", xItem + 4, yItem);
+  int boxW = 40;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  // Borrar fondo
+  tft.fillRect(boxX0 - 12, boxY - 2, (boxW + 6) * 2, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco alrededor de las cajas
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (respFocus == RESP_FOCUS_START) {
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);   // a la izquierda de caja izquierda
+  }
+  tft.setTextDatum(ML_DATUM);
+  if (respFocus == RESP_FOCUS_END) {
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2); // a la derecha de caja derecha
+  }
+
+  // Caja izquierda: color inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, respColorStart);
+
+  // Caja derecha: color final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, respColorEnd);
+
+  // --- Ciclo: texto y foco ---
+
+  int cycleY = boxY + boxH + 20;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  // Borrar zona ciclo
+  tft.fillRect(0, cycleY - 10, 240, 24, TFT_BLACK);
+
+  // Indicador de foco en ciclo
+  if (respFocus == RESP_FOCUS_CYCLE) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 60, cycleY);
+  }
+
+  // Texto ciclo
+  uint16_t tX10 = respCycleTimesX10[respCycleIndex];
+  char bufC[16];
+  if (tX10 < 10) {
+    snprintf(bufC, sizeof(bufC), "0.%d", tX10);
+  } else if (tX10 < 100) {
+    snprintf(bufC, sizeof(bufC), "%d.%d", tX10 / 10, tX10 % 10);
+  } else {
+    snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
+  }
+
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Ciclo: ", 80, cycleY);
+  tft.drawString(bufC, 80 + tft.textWidth("Ciclo: "), cycleY);
+
+  // --- Botón Iniciar ---
+
+  int btnY = cycleY + 28;
+  int btnW = 100;
+  int btnH = 26;
+  int btnX = (240 - btnW) / 2;
+
+  bool focusedButton = (respFocus == RESP_FOCUS_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(btnText, btnFill);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
 // ---------- Menús WiFi ----------
@@ -2432,6 +2612,7 @@ void loop() {
             drawSettingsBacklightScreen();
             break;
           case 2:
+            respFocus = RESP_FOCUS_START;
             currentScreen = SCREEN_SETTINGS_RESP;
             drawSettingsRespScreen();
             break;
@@ -2724,14 +2905,58 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_RESP: {
-      // Pulsar encoder: alternar RESPIRACION ON/OFF
-      if (encButtonFalling) {
-        startRespEffect();
-        currentScreen = SCREEN_CLOCK;
-        drawClockScreenFull();
+      // Al entrar en esta pantalla deberías haber puesto respFocus = RESP_FOCUS_START
+      // y llamado a drawSettingsRespScreen().
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+
+        if (respFocus == RESP_FOCUS_START) {
+          // Mover knob inicio
+          respKnobStartPos += dir;
+          if (respKnobStartPos < 0) respKnobStartPos = 0;
+          if (respKnobStartPos > 211) respKnobStartPos = 211;  // sliderW-1
+          uint8_t rr, gg, bb;
+          respColorStart = colorFromSlider((uint8_t)respKnobStartPos, rr, gg, bb);
+          saveConfigBasic();
+          drawSettingsRespScreen();
+        } else if (respFocus == RESP_FOCUS_END) {
+          // Mover knob final
+          respKnobEndPos += dir;
+          if (respKnobEndPos < 0) respKnobEndPos = 0;
+          if (respKnobEndPos > 211) respKnobEndPos = 211;
+          uint8_t rr2, gg2, bb2;
+          respColorEnd = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+          saveConfigBasic();
+          drawSettingsRespScreen();
+        } else if (respFocus == RESP_FOCUS_CYCLE) {
+          // Cambiar ciclo
+          int idx = (int)respCycleIndex + dir;
+          if (idx < 0) idx = 0;
+          if (idx >= RESP_CYCLE_STEPS) idx = RESP_CYCLE_STEPS - 1;
+          if (idx != respCycleIndex) {
+            respCycleIndex = (uint8_t)idx;
+            saveConfigBasic();
+            drawSettingsRespScreen();
+          }
+        }
       }
 
-      // Botón 2: salir a Ajustes, siempre parando efectos
+      // Pulsador encoder: cambiar foco o lanzar efecto
+      if (encButtonFalling) {
+        if (respFocus == RESP_FOCUS_BUTTON) {
+          // Lanzar efecto y volver al reloj
+          startRespEffect();
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        } else {
+          // Avanzar foco
+          respFocus = (RespFocus)((respFocus + 1) % 4);
+          drawSettingsRespScreen();
+        }
+      }
+
+      // Botón 2: volver a Ajustes, sin lanzar efecto
       if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
