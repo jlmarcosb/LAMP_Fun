@@ -139,7 +139,7 @@ enum Screen {
   SCREEN_SETTINGS_TIMEZONE,
   SCREEN_SETTINGS_TZOFFSET,
   SCREEN_SETTINGS_MAIN,
-  SCREEN_SETTINGS_LAMP,
+  SCREEN_SETTINGS_RESP,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -1860,7 +1860,7 @@ void drawSettingsBacklightScreen() {
 
 // ---------- Efectos (placeholder + RESPIRACION) ----------
 
-void drawSettingsLampScreen() {
+void drawSettingsRespScreen() {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars = -1;
   lastWifiTachado = false;
@@ -2432,8 +2432,8 @@ void loop() {
             drawSettingsBacklightScreen();
             break;
           case 2:
-            currentScreen = SCREEN_SETTINGS_LAMP;
-            drawSettingsLampScreen();
+            currentScreen = SCREEN_SETTINGS_RESP;
+            drawSettingsRespScreen();
             break;
           case 3:
             wifiMenuIndex = 0;
@@ -2723,7 +2723,7 @@ void loop() {
       break;
     }
 
-    case SCREEN_SETTINGS_LAMP: {
+    case SCREEN_SETTINGS_RESP: {
       // Pulsar encoder: alternar RESPIRACION ON/OFF
       if (encButtonFalling) {
         startRespEffect();
