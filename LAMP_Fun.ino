@@ -2981,8 +2981,7 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_RESP: {
-      // Al entrar en esta pantalla deberías haber puesto respFocus = RESP_FOCUS_START
-      // y llamado a drawSettingsRespScreen().
+      // Pantalla de configuración de RESPIRACION
 
       if (stepDir != 0) {
         int dir = (stepDir > 0) ? 1 : -1;
@@ -3032,10 +3031,10 @@ void loop() {
         }
       }
 
-      // Botón 2: volver a Ajustes, sin lanzar efecto
+      // Botón 2: volver a la lista de efectos, sin lanzar efecto
       if (btn2Falling) {
-        currentScreen = SCREEN_SETTINGS_MAIN;
-        drawSettingsMainScreen();
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
       }
 
       break;
