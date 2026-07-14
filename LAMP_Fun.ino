@@ -167,6 +167,7 @@ enum Screen {
   SCREEN_SETTINGS_TIMEZONE,
   SCREEN_SETTINGS_TZOFFSET,
   SCREEN_SETTINGS_MAIN,
+  SCREEN_SETTINGS_EFFECTS,
   SCREEN_SETTINGS_RESP,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
@@ -1277,6 +1278,9 @@ int settingsDateModeIndex = 0;
 int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
+int settingsEffectsIndex = 0;
+const int SETTINGS_EFFECTS_ITEMS = 1;
+
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
 
@@ -1398,6 +1402,46 @@ void drawSettingsMainScreen() {
     int  y        = startY + i * lineH;
     bool selected = (i == settingsMainIndex);
 
+    if (selected) {
+      tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
+      tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
+    } else {
+      tft.fillRect(10, y - 2, 220, lineH, TFT_BLACK);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    }
+    tft.drawString(lines[i], 14, y);
+  }
+}
+
+// ---------- Lista de efectos ----------
+
+void drawSettingsEffectsScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Efectos", 120, 15);
+
+  drawWifiSignalIcon();
+
+  tft.setTextSize(2);
+  tft.setTextDatum(TL_DATUM);
+
+  const char* lines[SETTINGS_EFFECTS_ITEMS] = {
+    "RESPIRACION"
+    // más adelante añadiremos COMETA, CUADRANTE, etc.
+  };
+
+  int startY = 60;
+  int lineH  = 24;
+
+  for (int i = 0; i < SETTINGS_EFFECTS_ITEMS; i++) {
+    int y = startY + i * lineH;
+    bool selected = (i == settingsEffectsIndex);
     if (selected) {
       tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
       tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
@@ -2612,8 +2656,8 @@ void loop() {
             drawSettingsBacklightScreen();
             break;
           case 2:
-            respFocus = RESP_FOCUS_START;
-            currentScreen = SCREEN_SETTINGS_RESP;
+            settingsEffectsIndex = 0;
+            currentScreen = SCREEN_SETTINGS_EFFECTS;
             drawSettingsRespScreen();
             break;
           case 3:
@@ -2901,6 +2945,38 @@ void loop() {
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
+      break;
+    }
+
+    case SCREEN_SETTINGS_EFFECTS: {
+      // Navegación por la lista de efectos
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+        settingsEffectsIndex += dir;
+        if (settingsEffectsIndex < 0) settingsEffectsIndex = SETTINGS_EFFECTS_ITEMS - 1;
+        if (settingsEffectsIndex >= SETTINGS_EFFECTS_ITEMS) settingsEffectsIndex = 0;
+        drawSettingsEffectsScreen();
+      }
+
+      if (encButtonFalling) {
+        switch (settingsEffectsIndex) {
+          case 0: // RESPIRACION
+            respFocus = RESP_FOCUS_START;      // empezamos en knob inicial
+            currentScreen = SCREEN_SETTINGS_RESP;
+            drawSettingsRespScreen();
+            break;
+
+          // más adelante, otros efectos: COMETA, CUADRANTE, etc.
+        }
+      }
+
+      if (btn2Falling) {
+        // Volver al menú principal de Ajustes
+        currentScreen = SCREEN_SETTINGS_MAIN;
+        drawSettingsMainScreen();
+      }
+
       break;
     }
 
