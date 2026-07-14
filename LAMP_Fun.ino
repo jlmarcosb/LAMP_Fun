@@ -405,6 +405,7 @@ void startRespEffect() {
 // Parar RESPIRACION (usamos infraestructura común)
 void stopRespEffect() {
   stopAllEffects();
+  updateLeds();
 }
 
 // Actualizar RESPIRACION (se llamará desde loop)
@@ -1861,9 +1862,10 @@ void drawSettingsBacklightScreen() {
 
 void drawSettingsLampScreen() {
   tft.fillScreen(TFT_BLACK);
-  lastWifiBars    = -1;
+  lastWifiBars = -1;
   lastWifiTachado = false;
 
+  // Cabecera
   tft.fillRect(0, 0, 240, 30, TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
@@ -1872,13 +1874,20 @@ void drawSettingsLampScreen() {
 
   drawWifiSignalIcon();
 
-  tft.setTextDatum(MC_DATUM);
+  // Mensaje informativo arriba
   tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
 
-  tft.drawString("Aqui iran efectos", 120, 100);
-  tft.drawString("y fade-in",         120, 130);
-  tft.drawString("RESPIRACION",       120, 160);
+  // Único ítem por ahora: RESPIRACION
+  int xItem  = 14;
+  int yItem  = 60;
+  int wItem  = 220;
+  int hItem  = 24;
+
+  // Como sólo hay un ítem, lo marcamos siempre como seleccionado
+  tft.fillRect(xItem, yItem - 2, wItem, hItem, TFT_DARKGREY);
+  tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
+  tft.drawString("RESPIRACION", xItem + 4, yItem);
 }
 
 // ---------- Menús WiFi ----------
@@ -2309,8 +2318,10 @@ void loop() {
       updateClockScreen();
 
       if (stepDir != 0 || encButtonFalling) {
-        stopAllEffects();
-        updateLeds();
+        if (anyEffectActive) {
+          stopAllEffects();
+          updateLeds();
+        }
         currentScreen  = SCREEN_LIGHT;
         currentControl = CTRL_BTN_POWER;
         editingBar     = false;
@@ -2318,8 +2329,11 @@ void loop() {
       }
 
       if (btn2Falling) {
+        if (anyEffectActive) {
+          stopAllEffects();
+        }
         settingsMainIndex = 0;
-        currentScreen     = SCREEN_SETTINGS_MAIN;
+        currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
       break;
@@ -2391,6 +2405,7 @@ void loop() {
       }
 
       if (btn2Falling) {
+        stopAllEffects();
         currentScreen = SCREEN_CLOCK;
         drawClockScreenFull();
       }
@@ -2709,23 +2724,15 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_LAMP: {
-      if (stepDir != 0) {
-        // si más adelante hay varios efectos, aquí cambiaríamos índice
-      }
-
       // Pulsar encoder: alternar RESPIRACION ON/OFF
       if (encButtonFalling) {
-        if (respEffectActive) {
-          stopRespEffect();      // apagado forzoso (negro)
-          // NO llamamos a updateLeds() aquí: lo hará Luz cuando entremos
-        } else {
-          startRespEffect();     // inicia el efecto
-        }
+        startRespEffect();
+        currentScreen = SCREEN_CLOCK;
+        drawClockScreenFull();
       }
 
       // Botón 2: salir a Ajustes, siempre parando efectos
       if (btn2Falling) {
-        stopAllEffects();        // asegura negro
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3040,6 +3047,12 @@ void loop() {
   lastSw   = sw;
   lastBtn2 = btn2;
 
+  if (lampOn && rainbowMode) {
+    rainbowHue++;
+    updateLeds();
+    delay(20);
+  }
+
   // --- Actualización de efectos (se ejecutan sólo si anyEffectActive == true) ---
   if (anyEffectActive && lampOn) {
     if (respEffectActive) {
@@ -3048,11 +3061,4 @@ void loop() {
     // futuros efectos: else if (otroEffectActive) update...
   }
 
-  if (lampOn && rainbowMode) {
-    rainbowHue++;
-    updateLeds();
-    delay(20);
-  }
-
-  delay(2);
 }
