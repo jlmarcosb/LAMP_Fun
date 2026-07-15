@@ -2015,6 +2015,12 @@ void drawSettingsRespScreen() {
   {
     uint8_t rr, gg, bb;
     uint16_t c = colorFromSlider((uint8_t)respKnobEndPos, rr, gg, bb);
+    if (respKnobEndPos >= 211) {
+      rr = 255;
+      gg = 255; 
+      bb = 255;
+      c = tft.color565(rr, gg, bb);
+    }
     tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c);
   }
 
@@ -2059,6 +2065,10 @@ void drawSettingsRespScreen() {
 
   // Caja derecha: color final
   tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = respColorEnd;
+  if (respKnobEndPos >= 211) {
+    boxEndColor = tft.color565(255, 255, 255);
+  }
   tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, respColorEnd);
 
   // --- Ciclo: texto y foco ---
