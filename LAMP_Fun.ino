@@ -1963,6 +1963,8 @@ void drawSettingsRespScreen() {
 
   drawWifiSignalIcon();
 
+  drawHeaderText("RESPIRACION");
+
   // --- Slider de color con dos knobs ---
 
   // Geometría del slider
@@ -2017,7 +2019,7 @@ void drawSettingsRespScreen() {
     uint16_t c2 = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
 
     // Si el knob está en el extremo derecho del slider, forzamos blanco
-    if (respKnobEndPos >= 211) {
+    if (respKnobEndPos >= 211) {        // 211 = sliderW - 1
       rr2 = 255;
       gg2 = 255;
       bb2 = 255;
