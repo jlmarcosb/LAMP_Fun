@@ -2983,41 +2983,48 @@ void loop() {
     case SCREEN_SETTINGS_RESP: {
       // Pantalla de configuración de RESPIRACION
 
+      // Giro del encoder: actúa según el foco
       if (stepDir != 0) {
         int dir = (stepDir > 0) ? 1 : -1;
 
         if (respFocus == RESP_FOCUS_START) {
           // Mover knob inicio
           respKnobStartPos += dir;
-          if (respKnobStartPos < 0) respKnobStartPos = 0;
-          if (respKnobStartPos > 211) respKnobStartPos = 211;  // sliderW-1
+          if (respKnobStartPos < 0)   respKnobStartPos = 0;
+          if (respKnobStartPos > 211) respKnobStartPos = 211;   // sliderW-1
+
           uint8_t rr, gg, bb;
           respColorStart = colorFromSlider((uint8_t)respKnobStartPos, rr, gg, bb);
           saveConfigBasic();
           drawSettingsRespScreen();
-        } else if (respFocus == RESP_FOCUS_END) {
+        }
+        else if (respFocus == RESP_FOCUS_END) {
           // Mover knob final
           respKnobEndPos += dir;
-          if (respKnobEndPos < 0) respKnobEndPos = 0;
+          if (respKnobEndPos < 0)   respKnobEndPos = 0;
           if (respKnobEndPos > 211) respKnobEndPos = 211;
+
           uint8_t rr2, gg2, bb2;
           respColorEnd = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
           saveConfigBasic();
           drawSettingsRespScreen();
-        } else if (respFocus == RESP_FOCUS_CYCLE) {
+        }
+        else if (respFocus == RESP_FOCUS_CYCLE) {
           // Cambiar ciclo
           int idx = (int)respCycleIndex + dir;
           if (idx < 0) idx = 0;
           if (idx >= RESP_CYCLE_STEPS) idx = RESP_CYCLE_STEPS - 1;
+
           if (idx != respCycleIndex) {
             respCycleIndex = (uint8_t)idx;
             saveConfigBasic();
             drawSettingsRespScreen();
           }
         }
+        // Si el foco está en el botón, el giro no hace nada
       }
 
-      // Pulsador encoder: cambiar foco o lanzar efecto
+      // Pulsador del encoder: avanzar foco o lanzar efecto
       if (encButtonFalling) {
         if (respFocus == RESP_FOCUS_BUTTON) {
           // Lanzar efecto y volver al reloj
@@ -3025,13 +3032,13 @@ void loop() {
           currentScreen = SCREEN_CLOCK;
           drawClockScreenFull();
         } else {
-          // Avanzar foco
+          // Avanzar foco: START -> END -> CYCLE -> BUTTON -> START
           respFocus = (RespFocus)((respFocus + 1) % 4);
           drawSettingsRespScreen();
         }
       }
 
-      // Botón 2: volver a la lista de efectos, sin lanzar efecto
+      // Botón 2: volver a la lista de efectos
       if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
