@@ -1730,6 +1730,54 @@ uint16_t colorFromSlider(uint8_t pos, uint8_t &r, uint8_t &g, uint8_t &b) {
   return rgbTo565(r, g, b);
 }
 
+// Degradado para efectos: negro -> rojo -> verde -> azul -> blanco
+uint16_t colorFromSliderEffects(uint8_t pos, uint8_t &r, uint8_t &g, uint8_t &b) {
+  if (pos == 0) {
+    r = g = b = 0;
+    return rgbTo565(0, 0, 0);   // negro
+  }
+
+  if (pos == 255) {
+    r = g = b = 255;
+    return rgbTo565(255, 255, 255);  // blanco
+  }
+
+  // Mapeo lineal en 4 tramos:
+  // 0..64: negro -> rojo
+  // 64..128: rojo -> verde
+  // 128..192: verde -> azul
+  // 192..255: azul -> blanco
+  if (pos <= 64) {
+    // Negro (0) -> Rojo (255,0,0)
+    float t = pos / 64.0f;
+    r = (uint8_t)(255.0f * t);
+    g = 0;
+    b = 0;
+  } else if (pos <= 128) {
+    // Rojo (255,0,0) -> Verde (0,255,0)
+    float t = (pos - 64) / 64.0f;
+    r = (uint8_t)(255.0f * (1.0f - t));
+    g = (uint8_t)(255.0f * t);
+    b = 0;
+  } else if (pos <= 192) {
+    // Verde (0,255,0) -> Azul (0,0,255)
+    float t = (pos - 128) / 64.0f;
+    r = 0;
+    g = (uint8_t)(255.0f * (1.0f - t));
+    b = (uint8_t)(255.0f * t);
+  } else {
+    // Azul (0,0,255) -> Blanco (255,255,255)
+    float t = (pos - 192) / 63.0f;   // 192..255
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    r = (uint8_t)(255.0f * t);
+    g = (uint8_t)(255.0f * t);
+    b = 255;
+  }
+
+  return rgbTo565(r, g, b);
+}
+
 uint8_t sliderPosFromColor(uint16_t c) {
   uint8_t r,g,b;
   rgbFrom565(c, r, g, b);
@@ -1766,8 +1814,16 @@ uint8_t sliderPosFromColor(uint16_t c) {
 }
 
 void initRespSliderPositions() {
+  // Calcular posiciones de knobs a partir de los colores guardados
   respKnobStartPos = sliderPosFromColor(respColorStart);
   respKnobEndPos   = sliderPosFromColor(respColorEnd);
+
+  // Asegurar que están dentro del rango del slider
+  if (respKnobStartPos < 0)   respKnobStartPos = 0;
+  if (respKnobStartPos > 211) respKnobStartPos = 211;
+
+  if (respKnobEndPos < 0)   respKnobEndPos = 0;
+  if (respKnobEndPos > 211) respKnobEndPos = 211;
 }
 
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
@@ -1973,10 +2029,10 @@ void drawSettingsRespScreen() {
   int sliderW = 212;
   int sliderH = 18;
 
-  // Dibujar fondo del slider (mismo degradado que en colores de reloj)
+  // Dibujar fondo del slider 
   for (int i = 0; i < sliderW; i++) {
     uint8_t rr, gg, bb; 
-    uint16_t c = colorFromSlider((uint8_t)i, rr, gg, bb);
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
     tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
   }
 
@@ -2003,7 +2059,7 @@ void drawSettingsRespScreen() {
   tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
   {
     uint8_t rr, gg, bb;
-    uint16_t c = colorFromSlider((uint8_t)respKnobStartPos, rr, gg, bb);
+    uint16_t c = colorFromSliderEffects((uint8_t)respKnobStartPos, rr, gg, bb);
     tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
   }
 
@@ -2013,7 +2069,7 @@ void drawSettingsRespScreen() {
   tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
   {
     uint8_t rr2, gg2, bb2;
-    uint16_t c2 = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+    uint16_t c2 = colorFromSliderEffects((uint8_t)respKnobEndPos, rr2, gg2, bb2);
 
     // Si el knob está en el extremo derecho del slider, forzamos blanco
     if (respKnobEndPos >= 211) {        // 211 = sliderW - 1
@@ -2965,7 +3021,6 @@ void loop() {
 
     case SCREEN_SETTINGS_EFFECTS: {
       // Navegación por la lista de efectos
-
       if (stepDir != 0) {
         int dir = (stepDir > 0) ? 1 : -1;
         settingsEffectsIndex += dir;
@@ -2974,21 +3029,23 @@ void loop() {
         drawSettingsEffectsScreen();
       }
 
+      // Pulsación del encoder: entrar en el efecto seleccionado
       if (encButtonFalling) {
         switch (settingsEffectsIndex) {
           case 0: // RESPIRACION
-            respFocus = RESP_FOCUS_START;      // empezamos en knob inicial
+            respFocus = RESP_FOCUS_START;
             initRespSliderPositions();
+            // NO recalculamos los colores aquí; usamos los ya guardados
             currentScreen = SCREEN_SETTINGS_RESP;
             drawSettingsRespScreen();
             break;
 
-          // más adelante, otros efectos: COMETA, CUADRANTE, etc.
+          // Más adelante, otros efectos: COMETA, CUADRANTE, etc.
         }
       }
 
+      // Botón 2: volver al menú de Ajustes principal
       if (btn2Falling) {
-        // Volver al menú principal de Ajustes
         currentScreen = SCREEN_SETTINGS_MAIN;
         drawSettingsMainScreen();
       }
@@ -3009,7 +3066,7 @@ void loop() {
           if (respKnobStartPos > 211) respKnobStartPos = 211;
 
           uint8_t rr, gg, bb;
-          respColorStart = colorFromSlider((uint8_t)respKnobStartPos, rr, gg, bb);
+          respColorStart = colorFromSliderEffects((uint8_t)respKnobStartPos, rr, gg, bb);
           saveConfigBasic();
           drawSettingsRespScreen();
         }
@@ -3020,7 +3077,7 @@ void loop() {
           if (respKnobEndPos > 211) respKnobEndPos = 211;
 
           uint8_t rr2, gg2, bb2;
-          respColorEnd = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+          respColorEnd = colorFromSliderEffects((uint8_t)respKnobEndPos, rr2, gg2, bb2);
           if (respKnobEndPos >= 211) {
             rr2 = 255;
             gg2 = 255; 
