@@ -1973,9 +1973,6 @@ void drawSettingsRespScreen() {
   int sliderW = 212;
   int sliderH = 18;
 
-  // Inicializar posiciones de knobs a partir de los colores
-  initRespSliderPositions();
-
   // Dibujar fondo del slider (mismo degradado que en colores de reloj)
   for (int i = 0; i < sliderW; i++) {
     uint8_t rr, gg, bb; 
@@ -2981,6 +2978,7 @@ void loop() {
         switch (settingsEffectsIndex) {
           case 0: // RESPIRACION
             respFocus = RESP_FOCUS_START;      // empezamos en knob inicial
+            initRespSliderPositions();
             currentScreen = SCREEN_SETTINGS_RESP;
             drawSettingsRespScreen();
             break;
