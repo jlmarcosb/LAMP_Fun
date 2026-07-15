@@ -1991,8 +1991,8 @@ void drawSettingsRespScreen() {
 
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("N", sliderX, sliderY - markerHeight - 8);                // izquierda
-  tft.drawString("B", sliderX + sliderW - 1, sliderY - markerHeight - 8);  // derecha
+  tft.drawString("N", sliderX, sliderY - markerHeight - 8);
+  tft.drawString("B", sliderX + sliderW - 1, sliderY - markerHeight - 8);
 
   // Altura donde dibujar las bolitas de los knobs
   int knobRadius = 7;
@@ -2013,19 +2013,21 @@ void drawSettingsRespScreen() {
   tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
   tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
   {
-    uint8_t rr, gg, bb;
-    uint16_t c = colorFromSlider((uint8_t)respKnobEndPos, rr, gg, bb);
+    uint8_t rr2, gg2, bb2;
+    uint16_t c2 = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+
+    // Si el knob está en el extremo derecho del slider, forzamos blanco
     if (respKnobEndPos >= 211) {
-      rr = 255;
-      gg = 255; 
-      bb = 255;
-      c = tft.color565(rr, gg, bb);
+      rr2 = 255;
+      gg2 = 255;
+      bb2 = 255;
+      c2  = tft.color565(rr2, gg2, bb2);
     }
-    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c);
+
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
   }
 
   // --- Texto RGB de knob activo ---
-
   uint16_t activeColor = (respFocus == RESP_FOCUS_END) ? respColorEnd : respColorStart;
   uint8_t r, g, b;
   rgbFrom565(activeColor, r, g, b);
