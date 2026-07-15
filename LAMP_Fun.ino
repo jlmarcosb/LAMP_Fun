@@ -3019,6 +3019,12 @@ void loop() {
 
           uint8_t rr2, gg2, bb2;
           respColorEnd = colorFromSlider((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+          if (respKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255; 
+            bb2 = 255;
+            respColorEnd = tft.color565(rr2, gg2, bb2);
+          }
           saveConfigBasic();
           drawSettingsRespScreen();
         }
