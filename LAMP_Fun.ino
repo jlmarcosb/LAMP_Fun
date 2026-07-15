@@ -1767,12 +1767,22 @@ uint16_t colorFromSliderEffects(uint8_t pos, uint8_t &r, uint8_t &g, uint8_t &b)
     b = (uint8_t)(255.0f * t);
   } else {
     // Azul (0,0,255) -> Blanco (255,255,255)
-    float t = (pos - 192) / 63.0f;   // 192..255
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    r = (uint8_t)(255.0f * t);
-    g = (uint8_t)(255.0f * t);
-    b = 255;
+    // Queremos que en la penúltima posición de RESPIRACION (211) siga habiendo azul puro.
+    // A partir de 212 empezamos a mezclar hacia blanco.
+    uint8_t startPos = 211;  // azul puro
+    uint8_t endPos   = 255;  // blanco
+    if (pos <= startPos) {
+      r = 0;
+      g = 0;
+      b = 255;
+    } else {
+      float t = (pos - startPos) / float(endPos - startPos); // 0..1 entre 211 y 255
+      if (t < 0.0f) t = 0.0f;
+      if (t > 1.0f) t = 1.0f;
+      r = (uint8_t)(255.0f * t);
+      g = (uint8_t)(255.0f * t);
+      b = 255;
+    }
   }
 
   return rgbTo565(r, g, b);
@@ -3115,6 +3125,10 @@ void loop() {
       }
 
       if (btn2Falling) {
+        saveConfigBasic();
+        if (respEffectActive) {
+          stopRespEffect();
+        }
         // Volver a la lista de efectos
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
