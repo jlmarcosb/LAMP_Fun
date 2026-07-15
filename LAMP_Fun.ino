@@ -1768,11 +1768,6 @@ uint8_t sliderPosFromColor(uint16_t c) {
 void initRespSliderPositions() {
   respKnobStartPos = sliderPosFromColor(respColorStart);
   respKnobEndPos   = sliderPosFromColor(respColorEnd);
-  if (respKnobEndPos < respKnobStartPos) {
-    int tmp = respKnobStartPos;
-    respKnobStartPos = respKnobEndPos;
-    respKnobEndPos   = tmp;
-  }
 }
 
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
@@ -1972,9 +1967,9 @@ void drawSettingsRespScreen() {
 
   // Geometría del slider
   int sliderX = 14;
-  int sliderY = 60;
+  int sliderY = 80;
   int sliderW = 212;
-  int sliderH = 16;
+  int sliderH = 18;
 
   // Inicializar posiciones de knobs a partir de los colores
   initRespSliderPositions();
@@ -1986,8 +1981,11 @@ void drawSettingsRespScreen() {
     tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
   }
 
+  // Contorno blanco del slider (igual que en relojes)
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
+
   // Líneas "N" y "B" en extremos, más altas que los knobs
-  int markerHeight = 24;
+  int markerHeight = 26;
   tft.drawFastVLine(sliderX, sliderY - markerHeight, markerHeight, TFT_WHITE);
   tft.drawFastVLine(sliderX + sliderW - 1, sliderY - markerHeight, markerHeight, TFT_WHITE);
 
@@ -1997,8 +1995,8 @@ void drawSettingsRespScreen() {
   tft.drawString("B", sliderX + sliderW - 1, sliderY - markerHeight - 8);  // derecha
 
   // Altura donde dibujar las bolitas de los knobs
-  int knobRadius = 5;
-  int knobCenterY = sliderY - 8;
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 10;
 
   // Knob inicio (izquierdo)
   int xStart = sliderX + respKnobStartPos;
@@ -2030,12 +2028,12 @@ void drawSettingsRespScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   char buf[32];
-  snprintf(buf, sizeof(buf), "R:%3d, G:%3d, B:%3d", r, g, b);
+  snprintf(buf, sizeof(buf), "R:%d G:%d B:%d", r, g, b);
   tft.drawString(buf, 120, sliderY + sliderH + 14);
 
   // --- Cajitas de color inicio / final ---
 
-  int boxW = 40;
+  int boxW = 60;
   int boxH = 24;
   int boxY = sliderY + sliderH + 36;
   int boxX0 = 120 - boxW - 6;
@@ -2075,10 +2073,10 @@ void drawSettingsRespScreen() {
   // Indicador de foco en ciclo
   if (respFocus == RESP_FOCUS_CYCLE) {
     tft.setTextDatum(MR_DATUM);
-    tft.drawString(">", 60, cycleY);
+    tft.drawString(">", 50, cycleY);
   }
 
-  // Texto ciclo
+  // Texto ciclo centrado
   uint16_t tX10 = respCycleTimesX10[respCycleIndex];
   char bufC[16];
   if (tX10 < 10) {
@@ -2089,10 +2087,14 @@ void drawSettingsRespScreen() {
     snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
   }
 
-  tft.setTextDatum(ML_DATUM);
+  // Construimos la cadena completa "Ciclo: X"
+  char lineC[24];
+  snprintf(lineC, sizeof(lineC), "Ciclo: %s", bufC);
+
+  // Centramos la cadena completa
+  tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Ciclo: ", 80, cycleY);
-  tft.drawString(bufC, 80 + tft.textWidth("Ciclo: "), cycleY);
+  tft.drawString(lineC, 120, cycleY);
 
   // --- Botón Iniciar ---
 
@@ -2989,7 +2991,8 @@ void loop() {
         int dir = (stepDir > 0) ? 1 : -1;
 
         if (respFocus == RESP_FOCUS_START) {
-          respKnobStartPos += dir;
+          int step = 5;
+          respKnobStartPos += dir * step;
           if (respKnobStartPos < 0)   respKnobStartPos = 0;
           if (respKnobStartPos > 211) respKnobStartPos = 211;
 
@@ -2999,7 +3002,8 @@ void loop() {
           drawSettingsRespScreen();
         }
         else if (respFocus == RESP_FOCUS_END) {
-          respKnobEndPos += dir;
+          int step = 5;
+          respKnobEndPos += dir * step;
           if (respKnobEndPos < 0)   respKnobEndPos = 0;
           if (respKnobEndPos > 211) respKnobEndPos = 211;
 
