@@ -427,7 +427,7 @@ void stopAllEffects() {
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
-  clearAllLedsAndShow();
+  updateLeds();
 }
 
 // Iniciar RESPIRACION
@@ -446,7 +446,6 @@ void startRespEffect() {
 // Parar RESPIRACION (usamos infraestructura común)
 void stopRespEffect() {
   stopAllEffects();
-  updateLeds();
 }
 
 // Actualizar RESPIRACION (se llamará desde loop)
@@ -455,40 +454,54 @@ void updateRespEffect() {
 
   unsigned long now = millis();
   if (now - respLastUpdate < respIntervalMs) return;
+  unsigned long dtMs = now - respLastUpdate;
   respLastUpdate = now;
 
-  // Fase de 0..255 y vuelta (sube/baja)
-  if (respEffectForward) {
-    if (respPhase >= 255) {
-      respPhase = 255;
-      respEffectForward = false;
-    } else {
-      respPhase++;
-    }
+  // Duración total del ciclo (inicio -> final -> inicio) en milisegundos
+  uint16_t tX10 = respCycleTimesX10[respCycleIndex];   // en décimas de segundo
+  float cycleSeconds = tX10 / 10.0f;                   // en segundos
+  if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;        // seguridad: mínimo 0.2 s
+  float cycleMs = cycleSeconds * 1000.0f;
+
+  // Fase absoluta en ms dentro del ciclo (0 .. cycleMs)
+  static float phaseMs = 0.0f;
+  phaseMs += (float)dtMs;
+  if (phaseMs >= cycleMs) {
+    phaseMs -= cycleMs;  // wrap al principio del ciclo
+  }
+
+  // Fase normalizada 0..1 a lo largo de TODO el ciclo
+  float phase = phaseMs / cycleMs;  // 0..1
+
+  // Mapeo 0..1:
+  //  0.0  -> color inicio
+  //  0.5  -> color final
+  //  1.0  -> color inicio
+  float tt;
+  if (phase <= 0.5f) {
+    tt = phase / 0.5f;          // 0..1 (inicio -> final)
   } else {
-    if (respPhase == 0) {
-      respEffectForward = true;
-    } else {
-      respPhase--;
-    }
+    tt = (1.0f - phase) / 0.5f; // 1..0 (final -> inicio)
   }
 
-  // Calcular brillo relativo (0..1) a partir de respPhase
-  float t = respPhase / 255.0f;  // 0..1
-  // Curva tipo seno suave: 0..1..0
-  float b = 0.5f - 0.5f * cosf(t * 3.1415926f);
-  if (b < 0.0f) b = 0.0f;
-  if (b > 1.0f) b = 1.0f;
+  // Interpolar en RGB entre respColorStart y respColorEnd
+  uint8_t r0, g0, b0;
+  uint8_t r1, g1, b1;
+  rgbFrom565(respColorStart, r0, g0, b0);
+  rgbFrom565(respColorEnd,   r1, g1, b1);
 
-  // Aplicar a todos los leds usando el color de Luz actual
-  uint8_t r = (uint8_t)(redValue   * b);
-  uint8_t g = (uint8_t)(greenValue * b);
-  uint8_t bch = (uint8_t)(blueValue  * b);
+  float rf = r0 + (r1 - r0) * tt;
+  float gf = g0 + (g1 - g0) * tt;
+  float bf = b0 + (b1 - b0) * tt;
 
+  uint8_t r = (uint8_t)rf;
+  uint8_t g = (uint8_t)gf;
+  uint8_t b = (uint8_t)bf;
+
+  // Aplicar el color interpolado a todos los LEDs
   for (int i = 0; i < NUM_LEDS; i++) {
-    leds[i] = CRGB(r, g, bch);
+    leds[i] = CRGB(r, g, b);
   }
-
   FastLED.setBrightness(brightness);
   FastLED.show();
 }
