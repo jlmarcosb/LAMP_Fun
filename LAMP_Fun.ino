@@ -1788,6 +1788,85 @@ uint16_t colorFromSliderEffects(uint8_t pos, uint8_t &r, uint8_t &g, uint8_t &b)
   return rgbTo565(r, g, b);
 }
 
+// Inverso aproximado para el degradado de efectos
+uint8_t sliderPosFromColorEffects(uint16_t c) {
+  uint8_t r, g, b;
+  rgbFrom565(c, r, g, b);
+
+  // Negro casi puro
+  if (r < 8 && g < 8 && b < 8) return 0;
+
+  // Blanco casi puro
+  if (r > 247 && g > 247 && b > 247) return 255;
+
+  // Normalizamos a float 0..1
+  float fr = r / 255.0f;
+  float fg = g / 255.0f;
+  float fb = b / 255.0f;
+
+  // Determinar tramo aproximado según componente dominante
+  // Tramo rojo: negro->rojo (0..64) y rojo->verde (64..128)
+  if (fr >= fg && fr >= fb) {
+    if (fg < 0.1f && fb < 0.1f) {
+      // Negro -> rojo
+      float t = fr; // 0..1
+      uint8_t pos = (uint8_t)roundf(t * 64.0f);
+      if (pos > 64) pos = 64;
+      return pos;
+    } else {
+      // Rojo -> verde
+      float t = fg; // 0..1
+      uint8_t pos = 64 + (uint8_t)roundf(t * 64.0f);
+      if (pos < 64) pos = 64;
+      if (pos > 128) pos = 128;
+      return pos;
+    }
+  }
+
+  // Tramo verde: rojo->verde (64..128) y verde->azul (128..192)
+  if (fg >= fr && fg >= fb) {
+    if (fr > fb) {
+      // Rojo -> verde
+      float t = 1.0f - (fr / (fr + fg + 0.0001f)); // más verde que rojo
+      uint8_t pos = 64 + (uint8_t)roundf(t * 64.0f);
+      if (pos < 64) pos = 64;
+      if (pos > 128) pos = 128;
+      return pos;
+    } else {
+      // Verde -> azul
+      float t = fb; // 0..1
+      uint8_t pos = 128 + (uint8_t)roundf(t * 64.0f);
+      if (pos < 128) pos = 128;
+      if (pos > 192) pos = 192;
+      return pos;
+    }
+  }
+
+  // Tramo azul: verde->azul (128..192) y azul->blanco (192..255)
+  if (fb >= fr && fb >= fg) {
+    if (fr < 0.1f && fg < 0.1f) {
+      // Verde -> azul (casi pure blue)
+      float t = fb; // 0..1
+      uint8_t pos = 128 + (uint8_t)roundf(t * 64.0f);
+      if (pos < 128) pos = 128;
+      if (pos > 211) pos = 211; // azul puro en 211
+      return pos;
+    } else {
+      // Azul -> blanco
+      // Medimos cuánto blanco hay: min(r,g) respecto a b
+      float w = (fr + fg) * 0.5f; // 0..1
+      float t = w; // 0..1 => 211..255
+      uint8_t pos = 211 + (uint8_t)roundf(t * (255 - 211));
+      if (pos < 211) pos = 211;
+      if (pos > 255) pos = 255;
+      return pos;
+    }
+  }
+
+  // Fallback
+  return 0;
+}
+
 uint8_t sliderPosFromColor(uint16_t c) {
   uint8_t r,g,b;
   rgbFrom565(c, r, g, b);
@@ -1824,11 +1903,9 @@ uint8_t sliderPosFromColor(uint16_t c) {
 }
 
 void initRespSliderPositions() {
-  // Calcular posiciones de knobs a partir de los colores guardados
-  respKnobStartPos = sliderPosFromColor(respColorStart);
-  respKnobEndPos   = sliderPosFromColor(respColorEnd);
+  respKnobStartPos = sliderPosFromColorEffects(respColorStart);
+  respKnobEndPos   = sliderPosFromColorEffects(respColorEnd);
 
-  // Asegurar que están dentro del rango del slider
   if (respKnobStartPos < 0)   respKnobStartPos = 0;
   if (respKnobStartPos > 211) respKnobStartPos = 211;
 
@@ -2050,18 +2127,22 @@ void drawSettingsRespScreen() {
   tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
 
   // Líneas "N" y "B" en extremos, más altas que los knobs
-  int markerHeight = 26;
-  tft.drawFastVLine(sliderX, sliderY - markerHeight, markerHeight, TFT_WHITE);
-  tft.drawFastVLine(sliderX + sliderW - 1, sliderY - markerHeight, markerHeight, TFT_WHITE);
+  int gapAboveSlider = 5;
+  int markerHeight = 20;
+  int bottomY = sliderY - gapAboveSlider;
+  int topY = bottomY - markerHeight;
+
+  tft.drawFastVLine(sliderX, topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
 
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("N", sliderX, sliderY - markerHeight - 8);
-  tft.drawString("B", sliderX + sliderW - 1, sliderY - markerHeight - 8);
+  tft.drawString("N", sliderX, topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
 
   // Altura donde dibujar las bolitas de los knobs
   int knobRadius = 7;
-  int knobCenterY = sliderY - 10;
+  int knobCenterY = sliderY - 14;
 
   // Knob inicio (izquierdo)
   int xStart = sliderX + respKnobStartPos;
