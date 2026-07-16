@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.6.0
+// LAMP_Fun V.2.6.1
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -484,19 +484,44 @@ void updateRespEffect() {
     tt = (1.0f - phase) / 0.5f; // 1..0 (final -> inicio)
   }
 
-  // Interpolar en RGB entre respColorStart y respColorEnd
+  // Interpolar en HSV entre respColorStart y respColorEnd
   uint8_t r0, g0, b0;
   uint8_t r1, g1, b1;
   rgbFrom565(respColorStart, r0, g0, b0);
   rgbFrom565(respColorEnd,   r1, g1, b1);
 
-  float rf = r0 + (r1 - r0) * tt;
-  float gf = g0 + (g1 - g0) * tt;
-  float bf = b0 + (b1 - b0) * tt;
+  // Convertimos ambos a Hue(0..240) y Value(0..1)
+  float h0, v0;
+  float h1, v1;
+  rgbToHueValue240(r0, g0, b0, h0, v0);
+  rgbToHueValue240(r1, g1, b1, h1, v1);
 
-  uint8_t r = (uint8_t)round(rf);
-  uint8_t g = (uint8_t)round(gf);
-  uint8_t b = (uint8_t)round(bf);
+  // Interpolamos tono y valor
+  float hInterp, vInterp;
+
+  // Elegimos el camino corto de hue entre h0 y h1
+  float dh = h1 - h0;
+  if (dh > 120.0f)      dh -= 240.0f;
+  else if (dh < -120.0f) dh += 240.0f;
+
+  hInterp = h0 + dh * tt;
+  if (hInterp < 0.0f)   hInterp += 240.0f;
+  if (hInterp > 240.0f) hInterp -= 240.0f;
+
+  vInterp = v0 + (v1 - v0) * tt;
+
+  // Saturación: suponemos siempre 1.0 para mantener colores vivos
+  uint8_t r, g, b;
+  {
+    uint8_t rr, gg, bb;
+    // hsvToRgb240 usa tono 0..240, saturación=1, valor=vInterp
+    // La función actual asume S=1,V=1, así que adaptamos: escalamos luego por vInterp
+    hsvToRgb240(hInterp, rr, gg, bb);
+    float scale = vInterp;  // 0..1
+    r = (uint8_t)roundf(rr * scale);
+    g = (uint8_t)roundf(gg * scale);
+    b = (uint8_t)roundf(bb * scale);
+  }
 
   // Aplicar el color interpolado a todos los LEDs
   for (int i = 0; i < NUM_LEDS; i++) {
@@ -623,7 +648,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.6.0", 120, 85);
+  tft.drawString("V.2.6.1", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -1915,6 +1940,39 @@ uint8_t sliderPosFromColor(uint16_t c) {
   return pos;
 }
 
+// Convertir RGB (0..255) a Hue (0..240) y Value (0..1) aproximados
+void rgbToHueValue240(uint8_t r, uint8_t g, uint8_t b, float &h240, float &v) {
+  float fr = r / 255.0f;
+  float fg = g / 255.0f;
+  float fb = b / 255.0f;
+
+  float maxf = max(fr, max(fg, fb));
+  float minf = min(fr, min(fg, fb));
+  float delta = maxf - minf;
+
+  v = maxf;  // valor 0..1
+
+  if (delta < 0.001f) {
+    // Gris/negro/blanco: tono indefinido, ponemos 0
+    h240 = 0.0f;
+    return;
+  }
+
+  float hDeg;
+  if (maxf == fr) {
+    hDeg = 60.0f * fmodf(((fg - fb) / delta), 6.0f);
+  } else if (maxf == fg) {
+    hDeg = 60.0f * (((fb - fr) / delta) + 2.0f);
+  } else {
+    hDeg = 60.0f * (((fr - fg) / delta) + 4.0f);
+  }
+
+  if (hDeg < 0.0f) hDeg += 360.0f;
+  if (hDeg > 240.0f) hDeg = 240.0f;  // recortamos a 0..240
+
+  h240 = hDeg;  // tono en grados 0..240 para usar con hsvToRgb240
+}
+
 void initRespSliderPositions() {
   respKnobStartPos = sliderPosFromColorEffects(respColorStart);
   respKnobEndPos   = sliderPosFromColorEffects(respColorEnd);
@@ -2591,7 +2649,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.6.0",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.6.1",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
