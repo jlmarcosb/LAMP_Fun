@@ -81,7 +81,7 @@ bool respEffectActive = false;
 uint8_t respPhase = 0;           // 0..255 fase de brillo
 bool respEffectForward = true;   // subir/bajar
 unsigned long respLastUpdate = 0;
-uint16_t respIntervalMs = 30;    // velocidad base del efecto (ajustable después)
+uint16_t respIntervalMs = 20;    // velocidad base del efecto (ajustable después)
 
 // Configuración de RESPIRACION
 uint16_t respColorStart = 0x0000;  // negro por defecto
@@ -494,9 +494,9 @@ void updateRespEffect() {
   float gf = g0 + (g1 - g0) * tt;
   float bf = b0 + (b1 - b0) * tt;
 
-  uint8_t r = (uint8_t)rf;
-  uint8_t g = (uint8_t)gf;
-  uint8_t b = (uint8_t)bf;
+  uint8_t r = (uint8_t)round(rf);
+  uint8_t g = (uint8_t)round(gf);
+  uint8_t b = (uint8_t)round(bf);
 
   // Aplicar el color interpolado a todos los LEDs
   for (int i = 0; i < NUM_LEDS; i++) {
