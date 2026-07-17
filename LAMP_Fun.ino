@@ -609,7 +609,124 @@ void updateRespEffect() {
 void updateCometEffect() {
   if (!cometEffectActive) return;
 
-  // TODO: implementaremos aquí el recorrido completo del cometa
+  unsigned long now = millis();
+  // Para mantener fluidez, actualizamos cada 20 ms aprox (igual que RESPIRACION)
+  const uint16_t intervalMs = 20;
+  if (now - cometLastUpdate < intervalMs) return;
+  unsigned long dtMs = now - cometLastUpdate;
+  cometLastUpdate = now;
+
+  // Duración total del ciclo COMETA en ms (de aros 1-4 hasta desaparecer en aro 9)
+  uint16_t tX10 = cometCycleTimesX10[cometCycleIndex]; // en décimas de segundo
+  float cycleSeconds = tX10 / 10.0f;                   // en segundos
+  if (cycleSeconds < 1.0f) cycleSeconds = 1.0f;        // seguridad: mínimo 1 s
+  float cycleMs = cycleSeconds * 1000.0f;
+
+  // Fase normalizada 0..1 a lo largo de TODO el recorrido
+  // cometPhase ya es 0..1; la avanzamos en función de dtMs / cycleMs
+  float dPhase = (float)dtMs / cycleMs;
+  cometPhase += dPhase;
+  if (cometPhase > 1.0f) {
+    cometPhase -= 1.0f; // wrap al principio del ciclo
+  }
+
+  // Definimos las "etapas" de aros activos (cada etapa = 4 aros consecutivos)
+  // Etapa 0: aros 0-3 (1-4)
+  // Etapa 1: aros 1-4 (2-5)
+  // ...
+  // Etapa 5: aros 5-8 (6-9)
+  const int NUM_STAGES = 6;
+  float stageDuration = 1.0f / (float)NUM_STAGES; // cada etapa ocupa la misma fracción del ciclo
+  int stage = (int)(cometPhase / stageDuration);
+  if (stage >= NUM_STAGES) stage = NUM_STAGES - 1;
+
+  // Fase local dentro de la etapa actual (0..1)
+  float stagePhaseStart = stage * stageDuration;
+  float localPhase = (cometPhase - stagePhaseStart) / stageDuration;
+  if (localPhase < 0.0f) localPhase = 0.0f;
+  if (localPhase > 1.0f) localPhase = 1.0f;
+
+  // Aros activos en esta etapa
+  int baseRing = stage; // 0..5
+  int rings[COMET_RING_WIDTH];
+  for (int i = 0; i < COMET_RING_WIDTH; i++) {
+    rings[i] = baseRing + i; // p.ej. etapa 0 => 0,1,2,3 (aros 1-4)
+    if (rings[i] >= NUM_RINGS) rings[i] = NUM_RINGS - 1;
+  }
+
+  // Convertimos la fase local 0..1 en una posición angular 0..(maxLen-1)
+  // Usamos el aro "más exterior" de la etapa como referencia para el ángulo
+  int refRing = rings[0];            // aro más externo de los 4
+  int refLen  = ringLength[refRing]; // número de leds de ese aro
+
+  float pos = localPhase * (float)refLen; // 0..refLen
+  int headCenterPos = (int)pos;           // LED central de la cabeza en ese aro
+
+  // Limpiamos todos los LEDs antes de dibujar el cometa
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+
+  // Convertimos colores de inicio/fin a RGB
+  uint8_t rHead, gHead, bHead;
+  uint8_t rTail, gTail, bTail;
+  rgbFrom565(cometColorStart, rHead, gHead, bHead);
+  rgbFrom565(cometColorEnd,   rTail, gTail, bTail);
+
+  // Dibujar cometa en los 4 aros activos
+  for (int ri = 0; ri < COMET_RING_WIDTH; ri++) {
+    int ring = rings[ri];
+    int len  = ringLength[ring];
+
+    // Para cada aro, adaptamos la posición proporcionalmente a su longitud
+    float scale = (float)len / (float)refLen;
+    int localCenter = (int)(pos * scale);
+
+    // Dibujar cabeza: desde (center - headLen/2) hasta (center + headLen/2)
+    for (int h = -COMET_HEAD_LEN / 2; h <= COMET_HEAD_LEN / 2; h++) {
+      int p = localCenter + h;
+      int idx = ringLedIndex(ring, p);
+
+      // Núcleo de la cabeza = color inicial puro
+      float headFactor = 1.0f;
+      // Podemos atenuar un poco los extremos de la cabeza
+      if (h == -COMET_HEAD_LEN / 2 || h == COMET_HEAD_LEN / 2) {
+        headFactor = 0.6f;
+      }
+
+      uint8_t rr = (uint8_t)(rHead * headFactor);
+      uint8_t gg = (uint8_t)(gHead * headFactor);
+      uint8_t bb = (uint8_t)(bHead * headFactor);
+
+      leds[idx] = CRGB(rr, gg, bb);
+    }
+
+    // Dibujar cola detrás de la cabeza, en la misma dirección de avance (horaria)
+    for (int t = 1; t <= COMET_TAIL_LEN; t++) {
+      int p = localCenter - COMET_HEAD_LEN / 2 - t;
+      int idx = ringLedIndex(ring, p);
+
+      // t=1 muy cerca de la cabeza (casi color inicial),
+      // t=COMET_TAIL_LEN al final de la cola (color final).
+      float tailPos = (float)t / (float)COMET_TAIL_LEN; // 0..1
+      float inv = 1.0f - tailPos;
+
+      float rf = rHead * inv + rTail * tailPos;
+      float gf = gHead * inv + gTail * tailPos;
+      float bf = bHead * inv + bTail * tailPos;
+
+      uint8_t rr = (uint8_t)rf;
+      uint8_t gg = (uint8_t)gf;
+      uint8_t bb = (uint8_t)bf;
+
+      // Si ya hay algo dibujado (por solapamiento de aros), nos quedamos con el más brillante
+      CRGB existing = leds[idx];
+      if (existing.r + existing.g + existing.b < rr + gg + bb) {
+        leds[idx] = CRGB(rr, gg, bb);
+      }
+    }
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
 }
 
 // ----------------- Icono WiFi -----------------
