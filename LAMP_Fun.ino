@@ -3678,10 +3678,6 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_COMET: {
-      int stepDir = readEncoderStep();
-      bool encButtonFalling = wasEncoderButtonJustPressed();
-      bool btn2Falling = wasButton2JustPressed();
-
       // --- Girar encoder ---
       if (stepDir != 0) {
         if (editingBar) {
