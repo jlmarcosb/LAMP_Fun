@@ -3678,95 +3678,72 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_COMET: {
-      // --- Girar encoder ---
+      // Pantalla de configuración de COMETA
+
       if (stepDir != 0) {
-        if (editingBar) {
-          // Estamos editando el valor actual según el foco
-          switch (cometFocus) {
-            case COMET_FOCUS_START: {
-              // Mover knob de inicio y actualizar cometColorStart
-              cometKnobStartPos += stepDir;
-              if (cometKnobStartPos < 0) cometKnobStartPos = 0;
-              if (cometKnobStartPos > 211) cometKnobStartPos = 211;
+        int dir = (stepDir > 0) ? 1 : -1;
 
-              uint8_t rr, gg, bb;
-              uint16_t c = colorFromSliderEffects((uint8_t)cometKnobStartPos, rr, gg, bb);
-              cometColorStart = c;
-              break;
-            }
+        if (cometFocus == COMET_FOCUS_START) {
+          int step = 5;
+          cometKnobStartPos += dir * step;
+          if (cometKnobStartPos < 0)   cometKnobStartPos = 0;
+          if (cometKnobStartPos > 211) cometKnobStartPos = 211;
 
-            case COMET_FOCUS_END: {
-              // Mover knob de final y actualizar cometColorEnd
-              cometKnobEndPos += stepDir;
-              if (cometKnobEndPos < 0) cometKnobEndPos = 0;
-              if (cometKnobEndPos > 211) cometKnobEndPos = 211;
-
-              uint8_t rr, gg, bb;
-              uint16_t c = colorFromSliderEffects((uint8_t)cometKnobEndPos, rr, gg, bb);
-
-              // Si está en el extremo derecho, forzamos blanco puro
-              if (cometKnobEndPos >= 211) {
-                rr = 255; gg = 255; bb = 255;
-                c = tft.color565(rr, gg, bb);
-              }
-              cometColorEnd = c;
-              break;
-            }
-
-            case COMET_FOCUS_CYCLE: {
-              // Cambiar índice de ciclo 0..9
-              cometCycleIndex += stepDir;
-              if (cometCycleIndex < 0) cometCycleIndex = 0;
-              if (cometCycleIndex > 9) cometCycleIndex = 9;
-              break;
-            }
-
-            case COMET_FOCUS_BUTTON:
-            default:
-              // Nada que editar con giro cuando el foco está en el botón
-              break;
-          }
-        } else {
-          // No estamos editando: mover foco entre START, END, CYCLE, BUTTON
-          int f = (int)cometFocus;
-          f += stepDir;
-          if (f < 0) f = 0;
-          if (f > 3) f = 3;
-          cometFocus = (CometFocus)f;
-        }
-
-        drawSettingsCometScreen();
-      }
-
-      // --- Pulsación del encoder ---
-      if (encButtonFalling) {
-        if (!editingBar) {
-          if (cometFocus == COMET_FOCUS_BUTTON) {
-            // Botón Iniciar/Detener
-            if (cometEffectActive) {
-              stopCometEffect();
-            } else {
-              startCometEffect();
-            }
-          } else {
-            // Entrar en modo edición del control seleccionado
-            editingBar = true;
-          }
-        } else {
-          // Salir de edición y guardar
-          editingBar = false;
+          uint8_t rr, gg, bb;
+          cometColorStart = colorFromSliderEffects((uint8_t)cometKnobStartPos, rr, gg, bb);
           saveConfigBasic();
+          drawSettingsCometScreen();
         }
+        else if (cometFocus == COMET_FOCUS_END) {
+          int step = 5;
+          cometKnobEndPos += dir * step;
+          if (cometKnobEndPos < 0)   cometKnobEndPos = 0;
+          if (cometKnobEndPos > 211) cometKnobEndPos = 211;
 
-        drawSettingsCometScreen();
+          uint8_t rr2, gg2, bb2;
+          cometColorEnd = colorFromSliderEffects((uint8_t)cometKnobEndPos, rr2, gg2, bb2);
+          if (cometKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255; 
+            bb2 = 255;
+            cometColorEnd = tft.color565(rr2, gg2, bb2);
+          }
+          saveConfigBasic();
+          drawSettingsCometScreen();
+        }
+        else if (cometFocus == COMET_FOCUS_CYCLE) {
+          int idx = (int)cometCycleIndex + dir;
+          if (idx < 0) idx = 0;
+          if (idx > 9) idx = 9;  // cometCycleTimesX10 tiene 10 entradas (0..9)
+
+          if (idx != cometCycleIndex) {
+            cometCycleIndex = (uint8_t)idx;
+            saveConfigBasic();
+            drawSettingsCometScreen();
+          }
+        }
+        // COMET_FOCUS_BUTTON: el giro no hace nada
       }
 
-      // --- Botón 2: salir a menú de efectos (parando efecto si está activo) ---
-      if (btn2Falling) {
-        if (anyEffectActive) {
-          stopAllEffects();
+      if (encButtonFalling) {
+        if (cometFocus == COMET_FOCUS_BUTTON) {
+          // Lanzar efecto COMETA y volver al reloj
+          startCometEffect();
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        } else {
+          // Ciclo de focos START -> END -> CYCLE -> BUTTON -> START
+          cometFocus = (CometFocus)((cometFocus + 1) % 4);
+          drawSettingsCometScreen();
         }
-        editingBar = false;
+      }
+
+      if (btn2Falling) {
+        saveConfigBasic();
+        if (cometEffectActive) {
+          stopCometEffect();
+        }
+        // Volver a la lista de efectos
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
