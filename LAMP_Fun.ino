@@ -646,11 +646,33 @@ void updateCometEffect() {
   if (localPhase < 0.0f) localPhase = 0.0f;
   if (localPhase > 1.0f) localPhase = 1.0f;
 
-  // Aros activos en esta etapa
-  int baseRing = stage; // 0..5
+  // Aros activos en esta etapa, con adelgazamiento hacia el centro
   int rings[COMET_RING_WIDTH];
-  for (int i = 0; i < COMET_RING_WIDTH; i++) {
-    rings[i] = baseRing + i; // p.ej. etapa 0 => 0,1,2,3 (aros 1-4)
+  int activeRings = COMET_RING_WIDTH; // valor por defecto
+
+  if (stage <= 2) {
+    // Etapas 0,1,2: 4 aros (1-4, 2-5, 3-6)
+    activeRings = 4;
+  } else if (stage == 3) {
+    // Etapa 3: 4 aros (4-7)
+    activeRings = 4;
+  } else if (stage == 4) {
+    // Etapa 4: 3 aros (5-7-8)
+    activeRings = 3;
+  } else { // stage == 5
+    // Etapa 5: primero 2 aros, luego solo el central
+    if (localPhase < 0.5f) {
+      activeRings = 2;
+    } else {
+      activeRings = 1;
+    }
+  }
+
+  // Anillo base para cada etapa
+  int baseRing = stage; // 0..5
+
+  for (int i = 0; i < activeRings; i++) {
+    rings[i] = baseRing + i; 
     if (rings[i] >= NUM_RINGS) rings[i] = NUM_RINGS - 1;
   }
 
@@ -672,7 +694,7 @@ void updateCometEffect() {
   rgbFrom565(cometColorEnd,   rTail, gTail, bTail);
 
   // Dibujar cometa en los 4 aros activos
-  for (int ri = 0; ri < COMET_RING_WIDTH; ri++) {
+  for (int ri = 0; ri < activeRings; ri++) {
     int ring = rings[ri];
     int len  = ringLength[ring];
 
