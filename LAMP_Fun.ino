@@ -112,6 +112,9 @@ const uint16_t respCycleTimesX10[RESP_CYCLE_STEPS] = {
 }; 
 // Representan: 0.2, 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 s
 
+// Ciclos COMETA: 1..10 s (en pasos de 1 s) en décimas
+const uint16_t cometCycleTimesX10[10] = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
+
 // Estado de UI para pantalla RESPIRACION
 enum RespFocus {
   RESP_FOCUS_START = 0,   // knob/color inicial
@@ -2408,6 +2411,178 @@ void drawSettingsRespScreen() {
   int btnX = (240 - btnW) / 2;
 
   bool focusedButton = (respFocus == RESP_FOCUS_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(btnText, btnFill);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
+}
+
+void drawSettingsCometScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("COMETA", 120, 15);   // título en mayúsculas
+
+  drawWifiSignalIcon();
+
+  drawHeaderText("COMETA");
+
+  // --- Slider de color con dos knobs ---
+
+  // Geometría del slider (misma que RESPIRACION)
+  int sliderX = 14;
+  int sliderY = 80;
+  int sliderW = 212;
+  int sliderH = 18;
+
+  // Dibujar fondo del slider 
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb; 
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
+
+  // Contorno blanco del slider
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
+
+  // Líneas "N" y "B" en extremos
+  int gapAboveSlider = 5;
+  int markerHeight   = 20;
+  int bottomY        = sliderY - gapAboveSlider;
+  int topY           = bottomY - markerHeight;
+
+  tft.drawFastVLine(sliderX,               topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", sliderX,               topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
+
+  // Altura donde dibujar las bolitas de los knobs
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 14;
+
+  // Knob inicio (izquierdo)
+  int xStart = sliderX + respKnobStartPos;   // USAREMOS LOS MISMOS POS RESP PARA COMETA
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)respKnobStartPos, rr, gg, bb);
+    tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+  }
+
+  // Knob final (derecho)
+  int xEnd = sliderX + respKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr2, gg2, bb2;
+    uint16_t c2 = colorFromSliderEffects((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+
+    if (respKnobEndPos >= 211) {
+      rr2 = 255;
+      gg2 = 255;
+      bb2 = 255;
+      c2  = tft.color565(rr2, gg2, bb2);
+    }
+
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+  }
+
+  // --- Texto RGB de knob activo ---
+  uint16_t activeColor = (cometFocus == COMET_FOCUS_END) ? cometColorEnd : cometColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "R:%d G:%d B:%d", r, g, b);
+  tft.drawString(buf, 120, sliderY + sliderH + 14);
+
+  // --- Cajitas de color inicio / final ---
+
+  int boxW = 60;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  tft.fillRect(boxX0 - 12, boxY - 2, (boxW + 6) * 2, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco alrededor de las cajas
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (cometFocus == COMET_FOCUS_START) {
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
+  }
+  tft.setTextDatum(ML_DATUM);
+  if (cometFocus == COMET_FOCUS_END) {
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
+  }
+
+  // Caja izquierda: color inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, cometColorStart);
+
+  // Caja derecha: color final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = cometColorEnd;
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+
+  // --- Ciclo: texto y foco ---
+
+  int cycleY = boxY + boxH + 20;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.fillRect(0, cycleY - 10, 240, 24, TFT_BLACK);
+
+  if (cometFocus == COMET_FOCUS_CYCLE) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 50, cycleY);
+  }
+
+  uint16_t tX10 = cometCycleTimesX10[cometCycleIndex];
+  char bufC[16];
+  if (tX10 < 10) {
+    snprintf(bufC, sizeof(bufC), "0.%d", tX10);
+  } else if (tX10 < 100) {
+    snprintf(bufC, sizeof(bufC), "%d.%d", tX10 / 10, tX10 % 10);
+  } else {
+    snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
+  }
+
+  char lineC[24];
+  snprintf(lineC, sizeof(lineC), "Ciclo: %s", bufC);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(lineC, 120, cycleY);
+
+  // --- Botón Iniciar ---
+
+  int btnY = cycleY + 28;
+  int btnW = 100;
+  int btnH = 26;
+  int btnX = (240 - btnW) / 2;
+
+  bool focusedButton = (cometFocus == COMET_FOCUS_BUTTON);
 
   uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
   uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
