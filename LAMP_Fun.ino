@@ -138,6 +138,10 @@ CometFocus cometFocus = COMET_FOCUS_START;
 int respKnobStartPos = 0;
 int respKnobEndPos   = 0;
 
+// COMETA: knobs propios
+int cometKnobStartPos = 0;
+int cometKnobEndPos   = 0;
+
 bool use24hFormat = true;
 bool useAutoTime  = true;
 
