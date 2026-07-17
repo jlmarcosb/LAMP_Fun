@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.6.3
+// LAMP_Fun V.2.6.4
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -212,9 +212,9 @@ BarridoFocus barridoFocus = BARRIDO_FOCUS_START;
 
 // Tabla de tiempos de ciclo para BARRIDO (en décimas de segundo)
 // 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-const uint8_t BARRIDO_CYCLE_STEPS = 13;
+const uint8_t BARRIDO_CYCLE_STEPS = 14;
 const uint16_t barridoCycleTimesX10[BARRIDO_CYCLE_STEPS] = {
-  4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+  2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
 };
 
 // ----------------- Backlight TFT -----------------
@@ -794,7 +794,94 @@ void updateCometEffect() {
 void updateBarridoEffect() {
   if (!barridoEffectActive) return;
 
-  // TODO: implementaremos aquí la cortina de 17 filas (subida + bajada)
+  unsigned long now = millis();
+
+  // Intervalo base de refresco (similar a RESPIRACION/COMETA)
+  const uint16_t intervalMs = 20;
+  if (now - barridoLastUpdate < intervalMs) return;
+  unsigned long dtMs = now - barridoLastUpdate;
+  barridoLastUpdate = now;
+
+  // Duración total del ciclo BARRIDO (subida + bajada) en ms
+  uint16_t tX10 = barridoCycleTimesX10[barridoCycleIndex];   // en décimas de segundo
+  float cycleSeconds = tX10 / 10.0f;                         // en segundos
+  if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;              // seguridad: mínimo 0.2 s
+  float cycleMs = cycleSeconds * 1000.0f;
+
+  // Avanzar fase normalizada 0..1 en función de dtMs / cycleMs
+  float dPhase = (float)dtMs / cycleMs;
+  barridoPhase += dPhase;
+  if (barridoPhase > 1.0f) {
+    barridoPhase -= 1.0f;  // wrap al principio del ciclo
+  }
+
+  // Fase local de subida/bajada:
+  // 0.0..0.5 => sube (exterior -> interior)
+  // 0.5..1.0 => baja (interior -> exterior)
+  bool goingDown = false;
+  float localPhase = barridoPhase;
+  if (localPhase <= 0.5f) {
+    // Subida: normalizamos 0..0.5 a 0..1
+    localPhase = localPhase / 0.5f;
+  } else {
+    // Bajada: 0.5..1 -> 1..0
+    localPhase = (1.0f - localPhase) / 0.5f;
+    goingDown = true;
+  }
+
+  if (localPhase < 0.0f) localPhase = 0.0f;
+  if (localPhase > 1.0f) localPhase = 1.0f;
+
+  // Mapeamos localPhase (0..1) a una "fila" entre aro 0 y aro 8
+  // (9 aros => 0..8). Usamos un float para permitir posiciones intermedias.
+  float ringPos = localPhase * (float)(NUM_RINGS - 1); // 0..8
+  // Centro de la cortina en índice de aro (float)
+  float centerRingIndex = ringPos;
+
+  // Ancho de la cortina en aros (p.ej. 4 aros de grosor)
+  const int BARRIDO_RING_WIDTH = 4;
+
+  // Limpiamos todos los LEDs antes de dibujar la cortina
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+
+  // Convertimos colores inicio/fin a RGB
+  uint8_t r0, g0, b0;
+  uint8_t r1, g1, b1;
+  rgbFrom565(barridoColorStart, r0, g0, b0);
+  rgbFrom565(barridoColorEnd,   r1, g1, b1);
+
+  // Recorremos todos los aros y los coloreamos según su "distancia" al centro de la cortina
+  for (int ring = 0; ring < NUM_RINGS; ring++) {
+    float dist = fabsf((float)ring - centerRingIndex); // 0 en el centro, mayor cuanto más lejos
+
+    if (dist > (float)BARRIDO_RING_WIDTH) {
+      // Fuera del grosor de la cortina: queda negro
+      continue;
+    }
+
+    // factor 0 en el borde, 1 en el centro
+    float factor = 1.0f - (dist / (float)BARRIDO_RING_WIDTH);
+    if (factor < 0.0f) factor = 0.0f;
+    if (factor > 1.0f) factor = 1.0f;
+
+    // Mezclamos entre colorStart y colorEnd según "factor"
+    float rf = r0 + (r1 - r0) * factor;
+    float gf = g0 + (g1 - g0) * factor;
+    float bf = b0 + (b1 - b0) * factor;
+    uint8_t rr = (uint8_t)rf;
+    uint8_t gg = (uint8_t)gf;
+    uint8_t bb = (uint8_t)bf;
+
+    // Aplicamos el color a TODO el aro
+    int len = ringLength[ring];
+    for (int p = 0; p < len; p++) {
+      int idx = ringLedIndex(ring, p);
+      leds[idx] = CRGB(rr, gg, bb);
+    }
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
 }
 
 // ----------------- Icono WiFi -----------------
@@ -914,7 +1001,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.6.3", 120, 85);
+  tft.drawString("V.2.6.4", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -3287,7 +3374,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.6.3",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.6.4",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
