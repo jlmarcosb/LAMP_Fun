@@ -3677,6 +3677,107 @@ void loop() {
       break;
     }
 
+    case SCREEN_SETTINGS_COMET: {
+      int stepDir = readEncoderStep();
+      bool encButtonFalling = wasEncoderButtonJustPressed();
+      bool btn2Falling = wasButton2JustPressed();
+
+      // --- Girar encoder ---
+      if (stepDir != 0) {
+        if (editingBar) {
+          // Estamos editando el valor actual según el foco
+          switch (cometFocus) {
+            case COMET_FOCUS_START: {
+              // Mover knob de inicio y actualizar cometColorStart
+              cometKnobStartPos += stepDir;
+              if (cometKnobStartPos < 0) cometKnobStartPos = 0;
+              if (cometKnobStartPos > 211) cometKnobStartPos = 211;
+
+              uint8_t rr, gg, bb;
+              uint16_t c = colorFromSliderEffects((uint8_t)cometKnobStartPos, rr, gg, bb);
+              cometColorStart = c;
+              break;
+            }
+
+            case COMET_FOCUS_END: {
+              // Mover knob de final y actualizar cometColorEnd
+              cometKnobEndPos += stepDir;
+              if (cometKnobEndPos < 0) cometKnobEndPos = 0;
+              if (cometKnobEndPos > 211) cometKnobEndPos = 211;
+
+              uint8_t rr, gg, bb;
+              uint16_t c = colorFromSliderEffects((uint8_t)cometKnobEndPos, rr, gg, bb);
+
+              // Si está en el extremo derecho, forzamos blanco puro
+              if (cometKnobEndPos >= 211) {
+                rr = 255; gg = 255; bb = 255;
+                c = tft.color565(rr, gg, bb);
+              }
+              cometColorEnd = c;
+              break;
+            }
+
+            case COMET_FOCUS_CYCLE: {
+              // Cambiar índice de ciclo 0..9
+              cometCycleIndex += stepDir;
+              if (cometCycleIndex < 0) cometCycleIndex = 0;
+              if (cometCycleIndex > 9) cometCycleIndex = 9;
+              break;
+            }
+
+            case COMET_FOCUS_BUTTON:
+            default:
+              // Nada que editar con giro cuando el foco está en el botón
+              break;
+          }
+        } else {
+          // No estamos editando: mover foco entre START, END, CYCLE, BUTTON
+          int f = (int)cometFocus;
+          f += stepDir;
+          if (f < 0) f = 0;
+          if (f > 3) f = 3;
+          cometFocus = (CometFocus)f;
+        }
+
+        drawSettingsCometScreen();
+      }
+
+      // --- Pulsación del encoder ---
+      if (encButtonFalling) {
+        if (!editingBar) {
+          if (cometFocus == COMET_FOCUS_BUTTON) {
+            // Botón Iniciar/Detener
+            if (cometEffectActive) {
+              stopCometEffect();
+            } else {
+              startCometEffect();
+            }
+          } else {
+            // Entrar en modo edición del control seleccionado
+            editingBar = true;
+          }
+        } else {
+          // Salir de edición y guardar
+          editingBar = false;
+          saveConfigBasic();
+        }
+
+        drawSettingsCometScreen();
+      }
+
+      // --- Botón 2: salir a menú de efectos (parando efecto si está activo) ---
+      if (btn2Falling) {
+        if (anyEffectActive) {
+          stopAllEffects();
+        }
+        editingBar = false;
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
     case SCREEN_SETTINGS_COLORS_DIGITAL: {
       if (stepDir != 0) {
         int delta = (stepDir > 0 ? 5 : -5);
