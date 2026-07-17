@@ -180,6 +180,43 @@ const int COMET_RING_WIDTH = 4;      // 4 aros de grosor de cometa
 const int COMET_HEAD_LEN   = 3;      // LEDs de longitud angular de la cabeza
 const int COMET_TAIL_LEN   = 18;     // LEDs efectivos de cola (ángulo)
 
+// ---------- Efecto BARRIDO ----------
+
+bool barridoEffectActive = false;    // este efecto está en marcha
+
+// Configuración de usuario
+uint16_t barridoColorStart = 0xF800;   // rojo por defecto
+uint16_t barridoColorEnd   = 0x001F;   // azul por defecto
+
+// Ciclo: tiempo total del barrido (subida + bajada)
+// Índices 0..12 => 0.4, 0.6, 0.8, 1, 2..10 s
+uint8_t  barridoCycleIndex = 4;        // por defecto 2 s aprox
+
+// Dinámica interna del barrido
+float    barridoPhase = 0.0f;          // 0..1 a lo largo de TODO el ciclo (sube + baja)
+unsigned long barridoLastUpdate = 0;
+
+// Knobs propios del slider de BARRIDO
+int barridoKnobStartPos = 0;
+int barridoKnobEndPos   = 0;
+
+// Foco de la pantalla BARRIDO
+enum BarridoFocus {
+  BARRIDO_FOCUS_START,
+  BARRIDO_FOCUS_END,
+  BARRIDO_FOCUS_CYCLE,
+  BARRIDO_FOCUS_BUTTON
+};
+
+BarridoFocus barridoFocus = BARRIDO_FOCUS_START;
+
+// Tabla de tiempos de ciclo para BARRIDO (en décimas de segundo)
+// 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+const uint8_t BARRIDO_CYCLE_STEPS = 13;
+const uint16_t barridoCycleTimesX10[BARRIDO_CYCLE_STEPS] = {
+  4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+};
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -223,6 +260,7 @@ enum Screen {
   SCREEN_SETTINGS_EFFECTS,
   SCREEN_SETTINGS_RESP,
   SCREEN_SETTINGS_COMET,
+  SCREEN_SETTINGS_BARRIDO,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -312,6 +350,12 @@ void loadConfig() {
   cometCycleIndex = prefs.getUChar ("comCi", 2);
   if (cometCycleIndex > 9) cometCycleIndex = 9;       // 0..9 => 1..10 s
 
+  // Config BARRIDO
+  barridoColorStart = prefs.getUShort("barC0", 0xF800); // rojo por defecto
+  barridoColorEnd   = prefs.getUShort("barC1", 0x001F); // azul por defecto
+  barridoCycleIndex = prefs.getUChar ("barCi", 4);      // índice por defecto
+  if (barridoCycleIndex >= BARRIDO_CYCLE_STEPS) barridoCycleIndex = BARRIDO_CYCLE_STEPS - 1;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -359,6 +403,11 @@ void saveConfigBasic() {
   prefs.putUShort("comC0", cometColorStart);
   prefs.putUShort("comC1", cometColorEnd);
   prefs.putUChar ("comCi", cometCycleIndex);
+
+    // Config BARRIDO
+  prefs.putUShort("barC0", barridoColorStart);
+  prefs.putUShort("barC1", barridoColorEnd);
+  prefs.putUChar ("barCi", barridoCycleIndex);
 
   prefs.end();
 }
@@ -489,6 +538,7 @@ void stopAllEffects() {
   // Desactivar flags de efectos actuales
   respEffectActive  = false;
   cometEffectActive = false;
+  barridoEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
@@ -520,6 +570,18 @@ void startCometEffect() {
 }
 
 void stopCometEffect() {
+  stopAllEffects();
+}
+
+void startBarridoEffect() {
+  stopAllEffects();
+  barridoEffectActive = true;
+  anyEffectActive     = true;
+  barridoPhase        = 0.0f;
+  barridoLastUpdate   = millis();
+}
+
+void stopBarridoEffect() {
   stopAllEffects();
 }
 
@@ -727,6 +789,12 @@ void updateCometEffect() {
 
   FastLED.setBrightness(brightness);
   FastLED.show();
+}
+
+void updateBarridoEffect() {
+  if (!barridoEffectActive) return;
+
+  // TODO: implementaremos aquí la cortina de 17 filas (subida + bajada)
 }
 
 // ----------------- Icono WiFi -----------------
@@ -1515,7 +1583,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 2;
+const int SETTINGS_EFFECTS_ITEMS = 3;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -1669,7 +1737,8 @@ void drawSettingsEffectsScreen() {
 
   const char* lines[SETTINGS_EFFECTS_ITEMS] = {
     "RESPIRACION", 
-    "COMETA"
+    "COMETA",
+    "BARRIDO"
     // más adelante añadiremos COMETA, CUADRANTE, etc.
   };
 
@@ -2195,6 +2264,18 @@ void initCometSliderPositions() {
   if (cometKnobEndPos > 211) cometKnobEndPos = 211;
 }
 
+// Inicializar posiciones de sliders/knobs BARRIDO a partir de colores guardados
+void initBarridoSliderPositions() {
+  barridoKnobStartPos = sliderPosFromColorEffects(barridoColorStart);
+  barridoKnobEndPos   = sliderPosFromColorEffects(barridoColorEnd);
+
+  if (barridoKnobStartPos < 0)   barridoKnobStartPos = 0;
+  if (barridoKnobStartPos > 211) barridoKnobStartPos = 211;
+
+  if (barridoKnobEndPos < 0)   barridoKnobEndPos = 0;
+  if (barridoKnobEndPos > 211) barridoKnobEndPos = 211;
+}
+
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
@@ -2716,6 +2797,180 @@ void drawSettingsCometScreen() {
   int btnX = (240 - btnW) / 2;
 
   bool focusedButton = (cometFocus == COMET_FOCUS_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(btnText, btnFill);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
+}
+
+void drawSettingsBarridoScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("BARRIDO", 120, 15);
+
+  drawWifiSignalIcon();
+
+  drawHeaderText("BARRIDO");
+
+  // --- Slider de color con dos knobs ---
+
+  int sliderX = 14;
+  int sliderY = 80;
+  int sliderW = 212;
+  int sliderH = 18;
+
+  // Fondo del slider (mismo gradiente de efectos)
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
+
+  // Contorno del slider
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
+
+  // Líneas "N" y "B" arriba
+  int gapAboveSlider = 5;
+  int markerHeight   = 20;
+  int bottomY        = sliderY - gapAboveSlider;
+  int topY           = bottomY - markerHeight;
+
+  tft.drawFastVLine(sliderX,               topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", sliderX,               topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
+
+  // Knobs
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 14;
+
+  // Knob inicio
+  int xStart = sliderX + barridoKnobStartPos;
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)barridoKnobStartPos, rr, gg, bb);
+    tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+  }
+
+  // Knob final
+  int xEnd = sliderX + barridoKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr2, gg2, bb2;
+    uint16_t c2 = colorFromSliderEffects((uint8_t)barridoKnobEndPos, rr2, gg2, bb2);
+
+    if (barridoKnobEndPos >= 211) {
+      rr2 = 255;
+      gg2 = 255;
+      bb2 = 255;
+      c2  = tft.color565(rr2, gg2, bb2);
+    }
+
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+  }
+
+  // --- Texto RGB del knob activo ---
+  uint16_t activeColor = (barridoFocus == BARRIDO_FOCUS_END) ? barridoColorEnd : barridoColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "R:%d G:%d B:%d", r, g, b);
+  tft.drawString(buf, 120, sliderY + sliderH + 14);
+
+  // --- Cajitas de color inicio / final ---
+
+  int boxW = 60;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  tft.fillRect(boxX0 - 12, boxY - 2, (boxW + 6) * 2, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (barridoFocus == BARRIDO_FOCUS_START) {
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
+  }
+  tft.setTextDatum(ML_DATUM);
+  if (barridoFocus == BARRIDO_FOCUS_END) {
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
+  }
+
+  // Caja inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, barridoColorStart);
+
+  // Caja final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = barridoColorEnd;
+  if (barridoKnobEndPos >= 211) {
+    boxEndColor = tft.color565(255, 255, 255);
+  }
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+
+  // --- Ciclo ---
+
+  int cycleY = boxY + boxH + 20;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.fillRect(0, cycleY - 10, 240, 24, TFT_BLACK);
+
+  if (barridoFocus == BARRIDO_FOCUS_CYCLE) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 50, cycleY);
+  }
+
+  uint16_t tX10 = barridoCycleTimesX10[barridoCycleIndex];
+  char bufC[16];
+  if (tX10 < 10) {
+    snprintf(bufC, sizeof(bufC), "0.%d", tX10);
+  } else if (tX10 < 100) {
+    snprintf(bufC, sizeof(bufC), "%d.%d", tX10 / 10, tX10 % 10);
+  } else {
+    snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
+  }
+
+  char lineC[24];
+  snprintf(lineC, sizeof(lineC), "Ciclo: %s", bufC);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(lineC, 120, cycleY);
+
+  // --- Botón Iniciar ---
+
+  int btnY = cycleY + 28;
+  int btnW = 100;
+  int btnH = 26;
+  int btnX = (240 - btnW) / 2;
+
+  bool focusedButton = (barridoFocus == BARRIDO_FOCUS_BUTTON);
 
   uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
   uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
@@ -3590,6 +3845,13 @@ void loop() {
             currentScreen = SCREEN_SETTINGS_COMET;
             drawSettingsCometScreen();
             break;
+          
+          case 2: // BARRIDO
+            barridoFocus = BARRIDO_FOCUS_START;
+            initBarridoSliderPositions();
+            currentScreen = SCREEN_SETTINGS_BARRIDO;
+            drawSettingsBarridoScreen();
+            break;
 
         }
       }
@@ -3742,6 +4004,80 @@ void loop() {
         saveConfigBasic();
         if (cometEffectActive) {
           stopCometEffect();
+        }
+        // Volver a la lista de efectos
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_BARRIDO: {
+      // Pantalla de configuración de BARRIDO
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+
+        if (barridoFocus == BARRIDO_FOCUS_START) {
+          int step = 5;
+          barridoKnobStartPos += dir * step;
+          if (barridoKnobStartPos < 0)   barridoKnobStartPos = 0;
+          if (barridoKnobStartPos > 211) barridoKnobStartPos = 211;
+
+          uint8_t rr, gg, bb;
+          barridoColorStart = colorFromSliderEffects((uint8_t)barridoKnobStartPos, rr, gg, bb);
+          saveConfigBasic();
+          drawSettingsBarridoScreen();
+        }
+        else if (barridoFocus == BARRIDO_FOCUS_END) {
+          int step = 5;
+          barridoKnobEndPos += dir * step;
+          if (barridoKnobEndPos < 0)   barridoKnobEndPos = 0;
+          if (barridoKnobEndPos > 211) barridoKnobEndPos = 211;
+
+          uint8_t rr2, gg2, bb2;
+          barridoColorEnd = colorFromSliderEffects((uint8_t)barridoKnobEndPos, rr2, gg2, bb2);
+          if (barridoKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255; 
+            bb2 = 255;
+            barridoColorEnd = tft.color565(rr2, gg2, bb2);
+          }
+          saveConfigBasic();
+          drawSettingsBarridoScreen();
+        }
+        else if (barridoFocus == BARRIDO_FOCUS_CYCLE) {
+          int idx = (int)barridoCycleIndex + dir;
+          if (idx < 0) idx = 0;
+          if (idx >= BARRIDO_CYCLE_STEPS) idx = BARRIDO_CYCLE_STEPS - 1;
+
+          if (idx != barridoCycleIndex) {
+            barridoCycleIndex = (uint8_t)idx;
+            saveConfigBasic();
+            drawSettingsBarridoScreen();
+          }
+        }
+        // BARRIDO_FOCUS_BUTTON: el giro no hace nada
+      }
+
+      if (encButtonFalling) {
+        if (barridoFocus == BARRIDO_FOCUS_BUTTON) {
+          // Lanzar efecto y volver al reloj
+          startBarridoEffect();
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        } else {
+          // Ciclo de focos START -> END -> CYCLE -> BUTTON -> START
+          barridoFocus = (BarridoFocus)((barridoFocus + 1) % 4);
+          drawSettingsBarridoScreen();
+        }
+      }
+
+      if (btn2Falling) {
+        saveConfigBasic();
+        if (barridoEffectActive) {
+          stopBarridoEffect();
         }
         // Volver a la lista de efectos
         currentScreen = SCREEN_SETTINGS_EFFECTS;
@@ -4070,6 +4406,8 @@ void loop() {
       updateRespEffect();
     } else if (cometEffectActive) {
       updateCometEffect();
+    } else if (barridoEffectActive) {
+      updateBarridoEffect();
     }
     // futuros efectos: else if (otroEffectActive) update...
   }
