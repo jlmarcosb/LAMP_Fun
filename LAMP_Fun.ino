@@ -2066,6 +2066,18 @@ void initRespSliderPositions() {
   if (respKnobEndPos > 211) respKnobEndPos = 211;
 }
 
+// Inicializar posiciones de sliders/knobs COMETA a partir de colores guardados
+void initCometSliderPositions() {
+  cometKnobStartPos = sliderPosFromColorEffects(cometColorStart);
+  cometKnobEndPos   = sliderPosFromColorEffects(cometColorEnd);
+
+  if (cometKnobStartPos < 0)   cometKnobStartPos = 0;
+  if (cometKnobStartPos > 211) cometKnobStartPos = 211;
+
+  if (cometKnobEndPos < 0)   cometKnobEndPos = 0;
+  if (cometKnobEndPos > 211) cometKnobEndPos = 211;
+}
+
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
@@ -2480,24 +2492,24 @@ void drawSettingsCometScreen() {
   int knobCenterY = sliderY - 14;
 
   // Knob inicio (izquierdo)
-  int xStart = sliderX + respKnobStartPos;   // USAREMOS LOS MISMOS POS RESP PARA COMETA
+  int xStart = sliderX + cometKnobStartPos;
   tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
   tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
   {
     uint8_t rr, gg, bb;
-    uint16_t c = colorFromSliderEffects((uint8_t)respKnobStartPos, rr, gg, bb);
+    uint16_t c = colorFromSliderEffects((uint8_t)cometKnobStartPos, rr, gg, bb);
     tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
   }
 
   // Knob final (derecho)
-  int xEnd = sliderX + respKnobEndPos;
+  int xEnd = sliderX + cometKnobEndPos;
   tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
   tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
   {
     uint8_t rr2, gg2, bb2;
-    uint16_t c2 = colorFromSliderEffects((uint8_t)respKnobEndPos, rr2, gg2, bb2);
+    uint16_t c2 = colorFromSliderEffects((uint8_t)cometKnobEndPos, rr2, gg2, bb2);
 
-    if (respKnobEndPos >= 211) {
+    if (cometKnobEndPos >= 211) {
       rr2 = 255;
       gg2 = 255;
       bb2 = 255;
@@ -3451,12 +3463,13 @@ void loop() {
           case 0: // RESPIRACION
             respFocus = RESP_FOCUS_START;
             initRespSliderPositions();
-            // NO recalculamos los colores aquí; usamos los ya guardados
             currentScreen = SCREEN_SETTINGS_RESP;
             drawSettingsRespScreen();
             break;
 
           case 1: // COMETA
+            cometFocus = COMET_FOCUS_START;
+            initCometSliderPositions();
             currentScreen = SCREEN_SETTINGS_COMET;
             drawSettingsCometScreen();
             break;
