@@ -59,6 +59,21 @@ int8_t tzOffsetSteps = 0;  // -4..+4 => -2.0..+2.0 h en pasos 0.5h
 
 TFT_eSPI tft;
 CRGB     leds[NUM_LEDS];
+
+// ---------- Geometría del foco: "Foco de José Luís" ----------
+
+const int NUM_RINGS = 9;
+const int ringLength[NUM_RINGS] = {60, 48, 40, 32, 24, 16, 12, 8, 1};
+const int ringStart[NUM_RINGS]  = {  0, 60,108,148,180,204,220,232,240 };
+
+// Acceso cómodo: índice global de "aro" y "posición en aro" (ambos 0-based, horario)
+inline int ringLedIndex(int ring, int posInRing) {
+  int len = ringLength[ring];
+  if (posInRing < 0) posInRing = (posInRing % len) + len;
+  posInRing %= len;
+  return ringStart[ring] + posInRing;
+}
+
 Preferences prefs;
 
 bool    lampOn       = true;
@@ -69,7 +84,7 @@ uint8_t greenValue   = 50;
 uint8_t blueValue    = 50;
 uint8_t rainbowHue   = 0;
 
-// ----------------- Efectos de luz (infraestructura común) -----------------
+// ----------------- Efectos (infraestructura común) -----------------
 
 // Flag global: hay algún efecto en ejecución
 bool anyEffectActive = false;
@@ -107,6 +122,15 @@ enum RespFocus {
 
 RespFocus respFocus = RESP_FOCUS_START;
 
+enum CometFocus {
+  COMET_FOCUS_START,
+  COMET_FOCUS_END,
+  COMET_FOCUS_CYCLE,
+  COMET_FOCUS_BUTTON
+};
+
+CometFocus cometFocus = COMET_FOCUS_START;
+
 // Posiciones de knobs en el slider (0..sliderWidth-1)
 int respKnobStartPos = 0;
 int respKnobEndPos   = 0;
@@ -126,6 +150,28 @@ uint16_t analogDateColor      = TFT_WHITE;
 uint16_t analogFaceFillColor  = TFT_BLACK;
 
 bool firstManualBoot = false;
+
+// ---------- Efecto COMETA ----------
+
+bool cometEffectActive = false;      // este efecto está en marcha
+// reutilizaremos anyEffectActive junto con cometEffectActive
+
+// Configuración de usuario
+uint16_t cometColorStart = 0xF800;   // rojo por defecto
+uint16_t cometColorEnd   = 0x001F;   // azul por defecto
+
+// Ciclo: tiempo total del efecto (de aros 1-4 hasta desaparecer en aro 9)
+// Índices 0..9 => 1..10 segundos
+uint8_t  cometCycleIndex = 2;        // por defecto 3 s aprox
+
+// Dinámica interna del cometa
+float    cometPhase = 0.0f;          // 0..1 a lo largo de TODO el recorrido
+unsigned long cometLastUpdate = 0;
+
+// Parámetros del recorrido
+const int COMET_RING_WIDTH = 4;      // 4 aros de grosor de cometa
+const int COMET_HEAD_LEN   = 3;      // LEDs de longitud angular de la cabeza
+const int COMET_TAIL_LEN   = 18;     // LEDs efectivos de cola (ángulo)
 
 // ----------------- Backlight TFT -----------------
 
@@ -169,6 +215,7 @@ enum Screen {
   SCREEN_SETTINGS_MAIN,
   SCREEN_SETTINGS_EFFECTS,
   SCREEN_SETTINGS_RESP,
+  SCREEN_SETTINGS_COMET,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -250,8 +297,13 @@ void loadConfig() {
   respColorStart = prefs.getUShort("respC0", 0x0000);  // negro por defecto
   respColorEnd   = prefs.getUShort("respC1", 0xFFFF);  // blanco por defecto
   respCycleIndex = prefs.getUChar ("respCi", 4);       // por defecto índice 4 => 1.0 s
-
   if (respCycleIndex >= RESP_CYCLE_STEPS) respCycleIndex = RESP_CYCLE_STEPS - 1;
+
+  // Config COMETA
+  cometColorStart = prefs.getUShort("comC0", 0xF800); // rojo por defecto
+  cometColorEnd   = prefs.getUShort("comC1", 0x001F); // azul por defecto
+  cometCycleIndex = prefs.getUChar ("comCi", 2);
+  if (cometCycleIndex > 9) cometCycleIndex = 9;       // 0..9 => 1..10 s
 
   prefs.end();
 
@@ -295,6 +347,11 @@ void saveConfigBasic() {
   prefs.putUShort("respC0", respColorStart);
   prefs.putUShort("respC1", respColorEnd);
   prefs.putUChar ("respCi", respCycleIndex);
+
+  // Config COMETA
+  prefs.putUShort("comC0", cometColorStart);
+  prefs.putUShort("comC1", cometColorEnd);
+  prefs.putUChar ("comCi", cometCycleIndex);
 
   prefs.end();
 }
@@ -424,6 +481,7 @@ void stopAllEffects() {
 
   // Desactivar flags de efectos actuales
   respEffectActive  = false;
+  cometEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
@@ -434,10 +492,8 @@ void stopAllEffects() {
 void startRespEffect() {
   // Asegurarnos de que no quedan otros efectos
   stopAllEffects();
-
   respEffectActive  = true;
   anyEffectActive   = true;
-
   respEffectForward = true;
   respPhase         = 0;
   respLastUpdate    = millis();
@@ -445,6 +501,18 @@ void startRespEffect() {
 
 // Parar RESPIRACION (usamos infraestructura común)
 void stopRespEffect() {
+  stopAllEffects();
+}
+
+void startCometEffect() {
+  stopAllEffects();
+  cometEffectActive = true;
+  anyEffectActive   = true;
+  cometPhase        = 0.0f;
+  cometLastUpdate   = millis();
+}
+
+void stopCometEffect() {
   stopAllEffects();
 }
 
@@ -529,6 +597,12 @@ void updateRespEffect() {
   }
   FastLED.setBrightness(brightness);
   FastLED.show();
+}
+
+void updateCometEffect() {
+  if (!cometEffectActive) return;
+
+  // TODO: implementaremos aquí el recorrido completo del cometa
 }
 
 // ----------------- Icono WiFi -----------------
@@ -1317,7 +1391,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 1;
+const int SETTINGS_EFFECTS_ITEMS = 2;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -1470,7 +1544,8 @@ void drawSettingsEffectsScreen() {
   tft.setTextDatum(TL_DATUM);
 
   const char* lines[SETTINGS_EFFECTS_ITEMS] = {
-    "RESPIRACION"
+    "RESPIRACION", 
+    "COMETA"
     // más adelante añadiremos COMETA, CUADRANTE, etc.
   };
 
@@ -3202,7 +3277,11 @@ void loop() {
             drawSettingsRespScreen();
             break;
 
-          // Más adelante, otros efectos: COMETA, CUADRANTE, etc.
+          case 1: // COMETA
+            currentScreen = SCREEN_SETTINGS_COMET;
+            drawSettingsCometScreen();
+            break;
+
         }
       }
 
@@ -3606,6 +3685,8 @@ void loop() {
   if (anyEffectActive && lampOn) {
     if (respEffectActive) {
       updateRespEffect();
+    } else if (cometEffectActive) {
+      updateCometEffect();
     }
     // futuros efectos: else if (otroEffectActive) update...
   }
