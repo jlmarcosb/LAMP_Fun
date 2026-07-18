@@ -1887,14 +1887,17 @@ void drawSettingsEffectsScreen() {
   tft.setTextSize(2);
   tft.setTextDatum(ML_DATUM);
 
-  int startY = 50;
-  int lineH  = 30;
+  int startY = 55;   // un poco más abajo
+  int lineH  = 24;   // altura de cada renglón, sin dejar “fila vacía”
 
   for (int i = 0; i < EFFECTS_ITEMS; i++) {
     int y = startY + i * lineH;
+
     bool selected = (i == settingsEffectsIndex);
-    uint16_t bg = selected ? TFT_DARKGREY : TFT_BLACK;
-    uint16_t fg = selected ? TFT_BLUE : TFT_WHITE;
+
+    uint16_t bg   = selected ? TFT_DARKGREY : TFT_BLACK;
+    uint16_t fg   = selected ? TFT_BLUE     : TFT_WHITE;
+
     tft.fillRect(0, y - 10, 240, lineH, bg);
     tft.setTextColor(fg, bg);
     tft.drawString(lines[i], 20, y);
@@ -4412,6 +4415,79 @@ void loop() {
         saveConfigBasic();
         if (barridoEffectActive) {
           stopBarridoEffect();
+        }
+        // Volver a la lista de efectos
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_PERSIANA: {
+      // Pantalla de configuración de PERSIANA
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+
+        if (persianaFocus == PERSIANA_FOCUS_START) {
+          int step = 5;
+          persianaKnobStartPos += dir * step;
+          if (persianaKnobStartPos < 0)   persianaKnobStartPos = 0;
+          if (persianaKnobStartPos > 211) persianaKnobStartPos = 211;
+
+          uint8_t rr, gg, bb;
+          persianaColorStart = colorFromSliderEffects((uint8_t)persianaKnobStartPos, rr, gg, bb);
+          saveConfigBasic();
+          drawSettingsPersianaScreen();
+        }
+        else if (persianaFocus == PERSIANA_FOCUS_END) {
+          int step = 5;
+          persianaKnobEndPos += dir * step;
+          if (persianaKnobEndPos < 0)   persianaKnobEndPos = 0;
+          if (persianaKnobEndPos > 211) persianaKnobEndPos = 211;
+
+          uint8_t rr2, gg2, bb2;
+          persianaColorEnd = colorFromSliderEffects((uint8_t)persianaKnobEndPos, rr2, gg2, bb2);
+          if (persianaKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255; 
+            bb2 = 255;
+            persianaColorEnd = tft.color565(rr2, gg2, bb2);
+          }
+          saveConfigBasic();
+          drawSettingsPersianaScreen();
+        }
+        else if (persianaFocus == PERSIANA_FOCUS_CYCLE) {
+          int idx = (int)persianaCycleIndex + dir;
+          if (idx < 0) idx = 0;
+          if (idx >= PERSIANA_CYCLE_STEPS) idx = PERSIANA_CYCLE_STEPS - 1;
+
+          if (idx != persianaCycleIndex) {
+            persianaCycleIndex = (uint8_t)idx;
+            saveConfigBasic();
+            drawSettingsBarridoScreen();
+          }
+        }
+      }
+
+      if (encButtonFalling) {
+        if (persianaFocus == PERSIANA_FOCUS_BUTTON) {
+          // Lanzar efecto y volver al reloj
+          startPersianaEffect();
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        } else {
+          // Ciclo de focos START -> END -> CYCLE -> BUTTON -> START
+          persianaFocus = (PersianaFocus)((persianaFocus + 1) % 4);
+          drawSettingsBarridoScreen();
+        }
+      }
+
+      if (btn2Falling) {
+        saveConfigBasic();
+        if (persianaEffectActive) {
+          stopPersianaEffect();
         }
         // Volver a la lista de efectos
         currentScreen = SCREEN_SETTINGS_EFFECTS;
