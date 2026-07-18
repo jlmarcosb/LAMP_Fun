@@ -947,7 +947,145 @@ void updateBarridoEffect() {
   FastLED.show();
 }
 
-void updatePersianaEffect();
+void updatePersianaEffect() {
+  if (!persianaEffectActive) return;
+
+  unsigned long now = millis();
+
+  // Intervalo base de refresco, similar a BARRIDO/COMETA
+  const uint16_t intervalMs = 20;
+  if (now - persianaLastUpdate < intervalMs) return;
+  unsigned long dtMs = now - persianaLastUpdate;
+  persianaLastUpdate = now;
+
+  // Duración total del ciclo PERSIANA (subida + bajada) en ms
+  uint16_t tX10 = persianaCycleTimesX10[persianaCycleIndex]; // décimas de segundo
+  float cycleSeconds = tX10 / 10.0f;
+  if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;              // mínimo 0.2 s
+  float cycleMs = cycleSeconds * 1000.0f;
+
+  // Avanzar fase normalizada 0..1
+  float dPhase = (float)dtMs / cycleMs;
+  persianaPhase += dPhase;
+  if (persianaPhase > 1.0f) {
+    persianaPhase -= 1.0f; // wrap al principio del ciclo
+  }
+
+  // La persiana "vive" en la mitad inferior (entre LED 1 y LED 31 aprox del aro externo)
+  const int EXT_RING = 0;          // aro externo (60 LEDs)
+  const int EXT_LEN  = ringLength[EXT_RING];
+  const int BOTTOM   = 1;          // LED 1 ~ parte baja
+  const int TOP      = 31;         // LED 31 ~ mitad superior
+  const int HEIGHT   = TOP - BOTTOM; // 30 pasos efectivos
+
+  // Dividimos el ciclo en tres zonas:
+  // 0.0 - 0.5: subida y relleno (de una lama a todas, de start arriba a end abajo)
+  // 0.5 - 0.75: subida final (la estructura completa se desplaza hacia arriba)
+  // 0.75 - 1.0: bajada completa (estructura se desplaza hacia abajo)
+  float p = persianaPhase;
+
+  int topPos    = TOP;
+  int bottomPos = BOTTOM;
+
+  if (p < 0.5f) {
+    // Fase 1: rellenar la persiana de start arriba a end abajo
+    float f = p / 0.5f; // 0..1
+    // top siempre en TOP, bottom desciende desde TOP hacia BOTTOM
+    topPos    = TOP;
+    bottomPos = TOP - (int)(f * (float)HEIGHT);
+    if (bottomPos < BOTTOM) bottomPos = BOTTOM;
+  } else if (p < 0.75f) {
+    // Fase 2: subir todo el bloque hasta que solo queda la lama de color final en TOP
+    float f = (p - 0.5f) / 0.25f; // 0..1
+    // En el final de fase 1 teníamos [BOTTOM, TOP] ocupado.
+    // Ahora desplazamos ambos límites hacia arriba hasta que bottom se acerque a TOP.
+    int span = HEIGHT;
+    int shift = (int)(f * (float)span);
+    topPos    = TOP + shift;
+    bottomPos = BOTTOM + shift;
+  } else {
+    // Fase 3: bajada desde solo final en TOP hasta todo apagado con start en BOTTOM
+    float f = (p - 0.75f) / 0.25f; // 0..1
+    // Al inicio de esta fase tenemos bottom/top muy arriba;
+    // los llevamos hacia abajo hasta [BOTTOM, TOP] y luego desaparece.
+    int span = HEIGHT;
+    int shift = (int)((1.0f - f) * (float)span);
+    topPos    = BOTTOM + span; // = TOP
+    bottomPos = BOTTOM + shift;
+    if (bottomPos > TOP) bottomPos = TOP;
+  }
+
+  // Si bottomPos supera topPos, no dibujamos nada
+  if (bottomPos > topPos) {
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.setBrightness(brightness);
+    FastLED.show();
+    return;
+  }
+
+  // Limpiamos todo antes de dibujar la persiana
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+
+  // Convertimos colores inicio/fin a RGB
+  uint8_t rs, gs, bs;
+  uint8_t re, ge, be;
+  rgbFrom565(persianaColorStart, rs, gs, bs);
+  rgbFrom565(persianaColorEnd,   re, ge, be);
+
+  // Para cada "altura" entre bottomPos y topPos, dibujamos una lama horizontal
+  int totalLamas = topPos - bottomPos + 1;
+  if (totalLamas < 1) {
+    FastLED.setBrightness(brightness);
+    FastLED.show();
+    return;
+  }
+
+  for (int y = bottomPos; y <= topPos; y++) {
+    int idxLama = y - bottomPos;       // 0..(totalLamas-1)
+    float t = (float)idxLama / (float)(totalLamas - 1 > 0 ? totalLamas - 1 : 1); // 0..1
+
+    // Interpolamos color vertical: t=0 -> colorEnd (abajo), t=1 -> colorStart (arriba)
+    float rf = re + (rs - re) * t;
+    float gf = ge + (gs - ge) * t;
+    float bf = be + (bs - be) * t;
+    uint8_t r = (uint8_t)rf;
+    uint8_t g = (uint8_t)gf;
+    uint8_t b = (uint8_t)bf;
+
+    // Calculamos ángulos para una "línea horizontal" en esta altura.
+    // En el aro externo, y va de 1 a 31; lo mapeamos a un ángulo relativo 0..pi (media circunferencia).
+    float rel = (float)(y - BOTTOM) / (float)(HEIGHT > 0 ? HEIGHT : 1); // 0 abajo, 1 arriba
+    float angle = rel * 3.1415926f; // 0..pi
+
+    // Para cada aro, elegimos dos LEDs simétricos alrededor de la vertical
+    for (int ring = 0; ring < NUM_RINGS; ring++) {
+      int len = ringLength[ring];
+      if (len <= 1) {
+        // aro central (1 LED): lo usamos solo cuando la lama está muy arriba
+        if (rel > 0.8f) {
+          int idxCenter = ringLedIndex(ring, 0);
+          leds[idxCenter] = CRGB(r, g, b);
+        }
+        continue;
+      }
+
+      // Mapeamos ángulo a índice de LED.
+      // Suponemos LED 0 en "sur" y avanzamos horario.
+      float pos = angle * (float)len / (2.0f * 3.1415926f); // 0..len/2 aprox
+      int p1 = (int)pos;
+      int p2 = (len - p1) % len; // simétrico
+
+      int idx1 = ringLedIndex(ring, p1);
+      int idx2 = ringLedIndex(ring, p2);
+
+      leds[idx1] = CRGB(r, g, b);
+      leds[idx2] = CRGB(r, g, b);
+    }
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
+}
 
 // ----------------- Icono WiFi -----------------
 
@@ -1875,6 +2013,7 @@ void drawSettingsEffectsScreen() {
   tft.fillScreen(TFT_BLACK);
 
   drawHeaderText("Efectos");
+  drawWifiSignalIcon();
 
   const int EFFECTS_ITEMS = 4;
   const char* lines[EFFECTS_ITEMS] = {
@@ -4819,6 +4958,8 @@ void loop() {
       updateCometEffect();
     } else if (barridoEffectActive) {
       updateBarridoEffect();
+    } else if (persianaEffectActive) {
+      updatePersianaEffect();
     }
     // futuros efectos: else if (otroEffectActive) update...
   }
