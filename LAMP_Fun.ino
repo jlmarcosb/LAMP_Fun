@@ -947,6 +947,8 @@ void updateBarridoEffect() {
   FastLED.show();
 }
 
+void updatePersianaEffect();
+
 // ----------------- Icono WiFi -----------------
 
 const int WIFI_ICON_X = 215;
@@ -1733,7 +1735,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 3;
+const int SETTINGS_EFFECTS_ITEMS = 4;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -1871,41 +1873,28 @@ void drawSettingsMainScreen() {
 
 void drawSettingsEffectsScreen() {
   tft.fillScreen(TFT_BLACK);
-  lastWifiBars = -1;
-  lastWifiTachado = false;
 
-  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Efectos", 120, 15);
+  drawHeaderText("EFECTOS");
 
-  drawWifiSignalIcon();
-
-  tft.setTextSize(2);
-  tft.setTextDatum(TL_DATUM);
-
-  const char* lines[SETTINGS_EFFECTS_ITEMS] = {
-    "RESPIRACION", 
+  const int EFFECTS_ITEMS = 4;
+  const char* lines[EFFECTS_ITEMS] = {
+    "RESPIRACION",
     "COMETA",
-    "BARRIDO"
-    // más adelante añadiremos COMETA, CUADRANTE, etc.
+    "BARRIDO",
+    "PERSIANA"
   };
 
-  int startY = 60;
-  int lineH  = 24;
+  tft.setTextSize(2);
+  tft.setTextDatum(ML_DATUM);
 
-  for (int i = 0; i < SETTINGS_EFFECTS_ITEMS; i++) {
+  int startY = 50;
+  int lineH  = 30;
+
+  for (int i = 0; i < EFFECTS_ITEMS; i++) {
     int y = startY + i * lineH;
-    bool selected = (i == settingsEffectsIndex);
-    if (selected) {
-      tft.fillRect(10, y - 2, 220, lineH, TFT_DARKGREY);
-      tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
-    } else {
-      tft.fillRect(10, y - 2, 220, lineH, TFT_BLACK);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    }
-    tft.drawString(lines[i], 14, y);
+    uint16_t color = (i == currentControl) ? TFT_YELLOW : TFT_WHITE;
+    tft.setTextColor(color, TFT_BLACK);
+    tft.drawString(lines[i], 20, y);
   }
 }
 
@@ -3133,6 +3122,8 @@ void drawSettingsBarridoScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
+void drawSettingsPersianaScreen();
+
 // ---------- Menús WiFi ----------
 
 int  wifiMenuIndex    = 0;
@@ -4001,6 +3992,12 @@ void loop() {
             initBarridoSliderPositions();
             currentScreen = SCREEN_SETTINGS_BARRIDO;
             drawSettingsBarridoScreen();
+            break;
+          case 3: // PERSIANA
+            persianaFocus = PERSIANA_FOCUS_START;
+            initPersianaSliderPositions();
+            currentScreen = SCREEN_SETTINGS_PERSIANA;
+            drawSettingsPersianaScreen();
             break;
 
         }
