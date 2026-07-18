@@ -1874,7 +1874,7 @@ void drawSettingsMainScreen() {
 void drawSettingsEffectsScreen() {
   tft.fillScreen(TFT_BLACK);
 
-  drawHeaderText("EFECTOS");
+  drawHeaderText("Efectos");
 
   const int EFFECTS_ITEMS = 4;
   const char* lines[EFFECTS_ITEMS] = {
