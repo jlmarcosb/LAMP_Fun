@@ -1892,8 +1892,11 @@ void drawSettingsEffectsScreen() {
 
   for (int i = 0; i < EFFECTS_ITEMS; i++) {
     int y = startY + i * lineH;
-    uint16_t color = (i == currentControl) ? TFT_YELLOW : TFT_WHITE;
-    tft.setTextColor(color, TFT_BLACK);
+    bool selected = (i == settingsEffectsIndex);
+    uint16_t bg = selected ? TFT_DARKGREY : TFT_BLACK;
+    uint16_t fg = selected ? TFT_BLUE : TFT_WHITE;
+    tft.fillRect(0, y - 10, 240, lineH, bg);
+    tft.setTextColor(fg, bg);
     tft.drawString(lines[i], 20, y);
   }
 }
