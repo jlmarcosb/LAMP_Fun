@@ -455,7 +455,7 @@ void saveConfigBasic() {
   prefs.putUChar ("barCi", barridoCycleIndex);
 
   // Config PERSIANA
-  prefs.putUShort("perCO", persianaColorStart);
+  prefs.putUShort("perC0", persianaColorStart);
   prefs.putUShort("perC1", persianaColorEnd); 
   prefs.putUChar ("perCi", persianaCycleIndex);
 
