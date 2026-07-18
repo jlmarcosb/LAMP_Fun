@@ -2012,6 +2012,9 @@ void drawSettingsMainScreen() {
 void drawSettingsEffectsScreen() {
   tft.fillScreen(TFT_BLACK);
 
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
   drawHeaderText("Efectos");
   drawWifiSignalIcon();
 
