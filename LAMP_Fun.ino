@@ -4466,9 +4466,10 @@ void loop() {
           if (idx != persianaCycleIndex) {
             persianaCycleIndex = (uint8_t)idx;
             saveConfigBasic();
-            drawSettingsBarridoScreen();
+            drawSettingsPersianaScreen();
           }
         }
+        // PERSIANA_FOCUS_BUTTON: el giro no hace nada
       }
 
       if (encButtonFalling) {
@@ -4480,7 +4481,7 @@ void loop() {
         } else {
           // Ciclo de focos START -> END -> CYCLE -> BUTTON -> START
           persianaFocus = (PersianaFocus)((persianaFocus + 1) % 4);
-          drawSettingsBarridoScreen();
+          drawSettingsPersianaScreen();
         }
       }
 
