@@ -2415,6 +2415,18 @@ void initBarridoSliderPositions() {
   if (barridoKnobEndPos > 211) barridoKnobEndPos = 211;
 }
 
+// Inicializar posiciones de sliders/knobs PERSIANA a partir de colores guardados
+void initPersianaSliderPositions() {
+  persianaKnobStartPos = sliderPosFromColorEffects(persianaColorStart);
+  persianaKnobEndPos   = sliderPosFromColorEffects(persianaColorEnd);
+
+  if (persianaKnobStartPos < 0)   persianaKnobStartPos = 0;
+  if (persianaKnobStartPos > 211) persianaKnobStartPos = 211;
+
+  if (persianaKnobEndPos < 0)   persianaKnobEndPos = 0;
+  if (persianaKnobEndPos > 211) persianaKnobEndPos = 211;
+}
+
 void drawColorSliderScreen(const char* title, const char* label, uint8_t sliderPos) {
   tft.fillScreen(TFT_BLACK);
   lastWifiBars    = -1;
@@ -3122,7 +3134,179 @@ void drawSettingsBarridoScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
-void drawSettingsPersianaScreen();
+void drawSettingsPersianaScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("PERSIANA", 120, 15);
+
+  drawWifiSignalIcon();
+
+  drawHeaderText("PERSIANA");
+
+  // --- Slider de color con dos knobs ---
+
+  int sliderX = 14;
+  int sliderY = 80;
+  int sliderW = 212;
+  int sliderH = 18;
+
+  // Fondo del slider (mismo gradiente de efectos)
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
+
+  // Contorno del slider
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
+
+  // Líneas "N" y "B" arriba
+  int gapAboveSlider = 5;
+  int markerHeight   = 20;
+  int bottomY        = sliderY - gapAboveSlider;
+  int topY           = bottomY - markerHeight;
+
+  tft.drawFastVLine(sliderX,               topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", sliderX,               topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
+
+  // Knobs
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 14;
+
+  // Knob inicio
+  int xStart = sliderX + persianaKnobStartPos;
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)persianaKnobStartPos, rr, gg, bb);
+    tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+  }
+
+  // Knob final
+  int xEnd = sliderX + persianaKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr2, gg2, bb2;
+    uint16_t c2 = colorFromSliderEffects((uint8_t)persianaKnobEndPos, rr2, gg2, bb2);
+
+    if (persianaKnobEndPos >= 211) {
+      rr2 = 255;
+      gg2 = 255;
+      bb2 = 255;
+      c2  = tft.color565(rr2, gg2, bb2);
+    }
+
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+  }
+
+  // --- Texto RGB del knob activo ---
+  uint16_t activeColor = (persianaFocus == PERSIANA_FOCUS_END) ? persianaColorEnd : persianaColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "R:%d G:%d B:%d", r, g, b);
+  tft.drawString(buf, 120, sliderY + sliderH + 14);
+
+  // --- Cajitas de color inicio / final ---
+
+  int boxW = 60;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  tft.fillRect(boxX0 - 12, boxY - 2, (boxW + 6) * 2, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (persianaFocus == PERSIANA_FOCUS_START) {
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
+  }
+  tft.setTextDatum(ML_DATUM);
+  if (persianaFocus == PERSIANA_FOCUS_END) {
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
+  }
+
+  // Caja inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, persianaColorStart);
+
+  // Caja final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = persianaColorEnd;
+  if (persianaKnobEndPos >= 211) {
+    boxEndColor = tft.color565(255, 255, 255);
+  }
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+
+  // --- Ciclo ---
+
+  int cycleY = boxY + boxH + 20;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.fillRect(0, cycleY - 10, 240, 24, TFT_BLACK);
+
+  if (persianaFocus == PERSIANA_FOCUS_CYCLE) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 50, cycleY);
+  }
+
+  uint16_t tX10 = persianaCycleTimesX10[persianaCycleIndex];
+  char bufC[16];
+  if (tX10 < 10) {
+    snprintf(bufC, sizeof(bufC), "0.%d", tX10);
+  } else if (tX10 < 100) {
+    snprintf(bufC, sizeof(bufC), "%d.%d", tX10 / 10, tX10 % 10);
+  } else {
+    snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
+  }
+
+  char lineC[24];
+  snprintf(lineC, sizeof(lineC), "Ciclo: %s", bufC);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(lineC, 120, cycleY);
+
+  // --- Botón Iniciar ---
+
+  int btnY = cycleY + 28;
+  int btnW = 100;
+  int btnH = 26;
+  int btnX = (240 - btnW) / 2;
+
+  bool focusedButton = (persianaFocus == PERSIANA_FOCUS_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(btnText, btnFill);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
+}
 
 // ---------- Menús WiFi ----------
 
