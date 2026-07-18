@@ -217,6 +217,44 @@ const uint16_t barridoCycleTimesX10[BARRIDO_CYCLE_STEPS] = {
   2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
 };
 
+// ---------- Efecto PERSIANA ----------
+bool persianaEffectActive = false;    // este efecto está en marcha
+
+// Configuración de usuario
+uint16_t persianaColorStart = 0xF800; // rojo por defecto
+uint16_t persianaColorEnd   = 0x001F; // azul por defecto
+
+// Ciclo: tiempo total del efecto (subida completa + bajada completa)
+// Índices 0..13 => 0.2, 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 s
+uint8_t persianaCycleIndex = 4;       // por defecto 1 s
+
+// Dinámica interna de la persiana
+float persianaPhase = 0.0f;           // 0..1 a lo largo de TODO el ciclo
+unsigned long persianaLastUpdate = 0; // para control de tiempo
+
+// Knobs propios del slider de PERSIANA
+int persianaKnobStartPos = 0;
+int persianaKnobEndPos   = 0;
+
+// Foco de la pantalla PERSIANA
+enum PersianaFocus {
+  PERSIANA_FOCUS_START,
+  PERSIANA_FOCUS_END,
+  PERSIANA_FOCUS_CYCLE,
+  PERSIANA_FOCUS_BUTTON
+};
+PersianaFocus persianaFocus = PERSIANA_FOCUS_START;
+
+// Tabla de tiempos de ciclo para PERSIANA (en décimas de segundo)
+// 0.2, 0.4, 0.6, 0.8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+const uint8_t PERSIANA_CYCLE_STEPS = 14;
+const uint16_t persianaCycleTimesX10[PERSIANA_CYCLE_STEPS] = {
+   2,  4,  6,  8, 10,
+  20, 30, 40, 50,
+  60, 70, 80, 90,
+ 100
+};
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -261,6 +299,7 @@ enum Screen {
   SCREEN_SETTINGS_RESP,
   SCREEN_SETTINGS_COMET,
   SCREEN_SETTINGS_BARRIDO,
+  SCREEN_SETTINGS_PERSIANA,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -356,6 +395,12 @@ void loadConfig() {
   barridoCycleIndex = prefs.getUChar ("barCi", 4);      // índice por defecto
   if (barridoCycleIndex >= BARRIDO_CYCLE_STEPS) barridoCycleIndex = BARRIDO_CYCLE_STEPS - 1;
 
+  // Config PERSIANA
+  persianaColorStart = prefs.getUShort("perC0", 0xF800); // rojo por defecto
+  persianaColorEnd   = prefs.getUShort("perC1", 0x001F); // azul por defecto
+  persianaCycleIndex = prefs.getUChar ("perCi", 4);      // índice por defecto 1 s
+  if (persianaCycleIndex >= PERSIANA_CYCLE_STEPS) persianaCycleIndex = PERSIANA_CYCLE_STEPS - 1;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -404,10 +449,15 @@ void saveConfigBasic() {
   prefs.putUShort("comC1", cometColorEnd);
   prefs.putUChar ("comCi", cometCycleIndex);
 
-    // Config BARRIDO
+  // Config BARRIDO
   prefs.putUShort("barC0", barridoColorStart);
   prefs.putUShort("barC1", barridoColorEnd);
   prefs.putUChar ("barCi", barridoCycleIndex);
+
+  // Config PERSIANA
+  prefs.putUShort("perCO", persianaColorStart);
+  prefs.putUShort("perC1", persianaColorEnd); 
+  prefs.putUChar ("perCi", persianaCycleIndex);
 
   prefs.end();
 }
@@ -539,6 +589,7 @@ void stopAllEffects() {
   respEffectActive  = false;
   cometEffectActive = false;
   barridoEffectActive = false;
+  persianaEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
@@ -582,6 +633,18 @@ void startBarridoEffect() {
 }
 
 void stopBarridoEffect() {
+  stopAllEffects();
+}
+
+void startPersianaEffect() {
+  stopAllEffects();
+  persianaEffectActive = true;
+  anyEffectActive      = true;
+  persianaPhase        = 0.0f;
+  persianaLastUpdate   = millis();
+}
+
+void stopPersianaEffect() {
   stopAllEffects();
 }
 
