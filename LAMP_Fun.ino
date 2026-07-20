@@ -84,6 +84,8 @@ uint8_t greenValue   = 50;
 uint8_t blueValue    = 50;
 uint8_t rainbowHue   = 0;
 
+
+
 // ----------------- Efectos (infraestructura común) -----------------
 
 // Flag global: hay algún efecto en ejecución
@@ -254,6 +256,64 @@ const uint16_t persianaCycleTimesX10[PERSIANA_CYCLE_STEPS] = {
   60, 70, 80, 90,
  100
 };
+
+// ----------------- Efecto RELOJ (LEDs) -----------------
+
+// Flag global: ¿el efecto RELOJ está activo?
+bool relojEffectActive = false;
+
+// Control del "Ciclo:" (fondo nebulosa). Valores 0..10 segundos.
+uint8_t relojCycleIndex = 0;   // índice actual de ciclo (0..10)
+
+// Tabla de tiempos de ciclo en décimas de segundo, índice 0..10
+// 0 -> 0 s (fondo estático, sin animación)
+// 1 -> 1 s, 2 -> 2 s, ..., 10 -> 10 s por pasada completa de la nebulosa.
+const uint8_t RELOJ_CYCLE_COUNT = 11;
+const uint16_t relojCycleTimesX10[RELOJ_CYCLE_COUNT] = {
+  0,   // 0: fondo estático
+  10,  // 1: 1.0 s
+  20,  // 2: 2.0 s
+  30,  // 3: 3.0 s
+  40,  // 4: 4.0 s
+  50,  // 5: 5.0 s
+  60,  // 6: 6.0 s
+  70,  // 7: 7.0 s
+  80,  // 8: 8.0 s
+  90,  // 9: 9.0 s
+  100  // 10: 10.0 s
+};
+
+// Fase de animación del fondo (0..1) y control de tiempo
+float relojPhase = 0.0f;
+unsigned long relojLastUpdate = 0;
+
+// Constantes de geometría para el efecto RELOJ
+// Aro 1: 60 LEDs (segundos y minutos)
+const uint8_t RELOJ_ARO_SECONDS_MINUTES = 1;
+
+// Aro 5: 24 LEDs (horas, 3 LEDs por hora)
+const uint8_t RELOJ_ARO_HOURS = 5;
+
+// LED "12" en aro 1 para segundos y minutos: LED 31 (1-based, norte)
+const uint8_t RELOJ_LED12_ARO1 = 31;
+
+// Marcas 12/3/6/9 en aros 1, 2, 3 (1-based)
+const uint8_t RELOJ_QUARTERS_ARO1[4] = { 1, 16, 31, 46 };
+const uint8_t RELOJ_QUARTERS_ARO2[4] = { 1, 13, 25, 37 };
+const uint8_t RELOJ_QUARTERS_ARO3[4] = { 1, 11, 21, 31 };
+
+// Marcas de 5 minutos en aro 2 (1-based)
+const uint8_t RELOJ_FIVEMIN_ARO2[12] = {
+  4, 7, 10,
+  16, 19, 22,
+  28, 31, 34,
+  40, 43, 46
+};
+
+// Prototipos de funciones del efecto RELOJ
+void startRelojEffect();
+void stopRelojEffect();
+void updateRelojEffect();
 
 // ----------------- Backlight TFT -----------------
 
@@ -590,6 +650,7 @@ void stopAllEffects() {
   cometEffectActive = false;
   barridoEffectActive = false;
   persianaEffectActive = false;
+  relojEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
