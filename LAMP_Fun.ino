@@ -314,6 +314,27 @@ const uint8_t RELOJ_FIVEMIN_ARO2[12] = {
   40, 43, 46
 };
 
+// ---------- UI del efecto RELOJ ----------
+
+// Knobs propios del slider de RELOJ (para colores)
+int relojKnobStartPos = 0;
+int relojKnobEndPos   = 0;
+
+// Foco de la pantalla RELOJ
+enum RelojFocus {
+  RELOJ_FOCUS_START,
+  RELOJ_FOCUS_END,
+  RELOJ_FOCUS_CYCLE,
+  RELOJ_FOCUS_BUTTON
+};
+RelojFocus relojFocus = RELOJ_FOCUS_START;
+
+// Inicializar posiciones de sliders de RELOJ a partir de colores actuales
+void initRelojSliderPositions() {
+  relojKnobStartPos = sliderPosFromColor(relojColorStart);
+  relojKnobEndPos   = sliderPosFromColor(relojColorEnd);
+}
+
 // Prototipos de funciones del efecto RELOJ
 void startRelojEffect();
 void stopRelojEffect();
@@ -2343,7 +2364,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 4;
+const int SETTINGS_EFFECTS_ITEMS = 5;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -2488,7 +2509,7 @@ void drawSettingsEffectsScreen() {
   drawHeaderText("Efectos");
   drawWifiSignalIcon();
 
-  const int EFFECTS_ITEMS = 4;
+  const int EFFECTS_ITEMS = 5;
   const char* lines[EFFECTS_ITEMS] = {
     "RESPIRACION",
     "COMETA",
@@ -3927,6 +3948,71 @@ void drawSettingsPersianaScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
+void drawSettingsRelojScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("RELOJ", 120, 15);
+  drawWifiSignalIcon();
+
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(2);
+
+  int y1 = 50;
+  int y2 = 90;
+  int y3 = 130;
+  int y4 = 180;
+
+  auto drawLabel = [&](const char* txt, int y, bool selected) {
+    if (selected) {
+      tft.fillRect(10, y - 2, 220, 24, TFT_DARKGREY);
+      tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
+    } else {
+      tft.fillRect(10, y - 2, 220, 24, TFT_BLACK);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    }
+    tft.drawString(txt, 14, y);
+  };
+
+  drawLabel("Seg inicio", y1, relojFocus == RELOJ_FOCUS_START);
+  drawLabel("Seg final",  y2, relojFocus == RELOJ_FOCUS_END);
+  drawLabel("Ciclo (s)",  y3, relojFocus == RELOJ_FOCUS_CYCLE);
+  drawLabel("Iniciar",    y4, relojFocus == RELOJ_FOCUS_BUTTON);
+
+  int sliderX = 20;
+  int sliderW = 200;
+  int sliderH = 10;
+
+  // Slider color inicio
+  {
+    uint8_t r, g, b;
+    rgbFrom565(relojColorStart, r, g, b);
+    drawColorSlider(sliderX, y1 + 22, sliderW, sliderH, r, g, b, relojKnobStartPos);
+  }
+
+  // Slider color final
+  {
+    uint8_t r, g, b;
+    rgbFrom565(relojColorEnd, r, g, b);
+    drawColorSlider(sliderX, y2 + 22, sliderW, sliderH, r, g, b, relojKnobEndPos);
+  }
+
+  // Valor de ciclo
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%2d s", relojCycleIndex);
+  tft.drawString(buf, 160, y3);
+
+  tft.setTextSize(1);
+  tft.drawString("0 = fondo fijo", 20, y3 + 22);
+}
+
 // ---------- Menús WiFi ----------
 
 int  wifiMenuIndex    = 0;
@@ -4796,11 +4882,19 @@ void loop() {
             currentScreen = SCREEN_SETTINGS_BARRIDO;
             drawSettingsBarridoScreen();
             break;
+
           case 3: // PERSIANA
             persianaFocus = PERSIANA_FOCUS_START;
             initPersianaSliderPositions();
             currentScreen = SCREEN_SETTINGS_PERSIANA;
             drawSettingsPersianaScreen();
+            break;
+
+          case 4: // RELOJ
+            relojFocus = RELOJ_FOCUS_START;
+            initRelojSliderPositions();
+            currentScreen = SCREEN_SETTINGS_RELOJ;
+            drawSettingsRelojScreen();
             break;
 
         }
