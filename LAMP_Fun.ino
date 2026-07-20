@@ -3984,23 +3984,22 @@ void drawSettingsRelojScreen() {
   drawLabel("Ciclo (s)",  y3, relojFocus == RELOJ_FOCUS_CYCLE);
   drawLabel("Iniciar",    y4, relojFocus == RELOJ_FOCUS_BUTTON);
 
-  int sliderX = 20;
-  int sliderW = 200;
-  int sliderH = 10;
+  // Muestras de color como pequeños recuadros a la derecha
+  int boxX = 190;
+  int boxW = 30;
+  int boxH = 18;
 
-  // Slider color inicio
-  {
-    uint8_t r, g, b;
-    rgbFrom565(relojColorStart, r, g, b);
-    drawColorSlider(sliderX, y1 + 22, sliderW, sliderH, r, g, b, relojKnobStartPos);
-  }
+  uint8_t r, g, b;
 
-  // Slider color final
-  {
-    uint8_t r, g, b;
-    rgbFrom565(relojColorEnd, r, g, b);
-    drawColorSlider(sliderX, y2 + 22, sliderW, sliderH, r, g, b, relojKnobEndPos);
-  }
+  // Color inicio
+  rgbFrom565(relojColorStart, r, g, b);
+  uint16_t cStart = tft.color565(r, g, b);
+  tft.fillRect(boxX, y1, boxW, boxH, cStart);
+
+  // Color final
+  rgbFrom565(relojColorEnd, r, g, b);
+  uint16_t cEnd = tft.color565(r, g, b);
+  tft.fillRect(boxX, y2, boxW, boxH, cEnd);
 
   // Valor de ciclo
   tft.setTextSize(2);
