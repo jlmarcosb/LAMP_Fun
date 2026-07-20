@@ -709,6 +709,21 @@ void stopPersianaEffect() {
   stopAllEffects();
 }
 
+// Iniciar RELOJ
+void startRelojEffect() {
+  stopAllEffects();
+  relojEffectActive = true;
+  anyEffectActive   = true;
+  // Inicializar estado de animación del fondo
+  relojPhase       = 0.0f;
+  relojLastUpdate  = millis();
+}
+
+// Parar RELOJ (usamos infraestructura común)
+void stopRelojEffect() {
+  stopAllEffects();
+}
+
 // Actualizar RESPIRACION (se llamará desde loop)
 void updateRespEffect() {
   if (!respEffectActive) return;
@@ -1281,6 +1296,144 @@ void updatePersianaEffect() {
         leds[idx] = CRGB(r, g, b);
       }
     }
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
+}
+
+// ----------------- Actualización efecto RELOJ (LEDs) -----------------
+
+void updateRelojEffect() {
+  if (!relojEffectActive) return;
+
+  // 1) Obtener hora local ajustada
+  struct tm timeinfo;
+  if (!getAdjustedLocalTime(timeinfo)) {
+    // Si no hay hora válida, no dibujamos nada especial
+    return;
+  }
+
+  int hours24 = timeinfo.tm_hour;
+  int minutes = timeinfo.tm_min;
+  int seconds = timeinfo.tm_sec;
+
+  // 2) Convertir a formato 12h para los LEDs (1..12)
+  int hour12;
+  if (hours24 == 0)      hour12 = 12;
+  else if (hours24 > 12) hour12 = hours24 - 12;
+  else                   hour12 = hours24;
+
+  // 3) Actualizar fase de animación del fondo (nebulosa)
+  unsigned long now = millis();
+  unsigned long dtMs = now - relojLastUpdate;
+  if (dtMs > 200) dtMs = 200; // limitar saltos grandes
+  relojLastUpdate = now;
+
+  uint8_t idx = relojCycleIndex;
+  if (idx >= RELOJ_CYCLE_COUNT) idx = RELOJ_CYCLE_COUNT - 1;
+  uint16_t tX10 = relojCycleTimesX10[idx];
+
+  if (tX10 == 0) {
+    // Ciclo = 0 -> fondo estático: no avanzamos fase
+  } else {
+    float cycleSeconds = tX10 / 10.0f;       // 1..10 s
+    float cycleMs      = cycleSeconds * 1000.0f;
+    float dPhase       = (float)dtMs / cycleMs;
+    relojPhase += dPhase;
+    if (relojPhase > 1.0f) relojPhase -= 1.0f;
+  }
+
+  // 4) Limpiar todos los LEDs
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+
+  // A partir de aquí iremos añadiendo capas:
+  //   - Fondo nebulosa (en función de relojPhase)
+  //   - Marcas fijas (12/3/6/9 y 5 min)
+  //   - Segundero (aro 1, rastro, degradado)
+  //   - Minutero (aro 1, sin rastro, dominante)
+  //   - Horas (aro 5, 3 LEDs)
+
+  // 5) Cálculo de posiciones de minutos y segundos en aro 1
+
+  const uint8_t aroSM = RELOJ_ARO_SECONDS_MINUTES;  // aro 1
+  int lenAroSM = ringLength[aroSM - 1];             // ringLength usa índice 0-based
+
+  // Seguridad: si por cualquier cosa no son 60 LEDs, hacemos guardia
+  if (lenAroSM <= 0) {
+    FastLED.setBrightness(brightness);
+    FastLED.show();
+    return;
+  }
+
+  // LED 12 (norte) es RELOJ_LED12_ARO1 (1-based)
+  // Minuto actual: 0..59
+  int minuteIndex = minutes; // 0..59
+  int posMin = RELOJ_LED12_ARO1 + minuteIndex;
+  while (posMin > lenAroSM) posMin -= lenAroSM;
+  while (posMin < 1)        posMin += lenAroSM;
+
+  // Segundos: rastro 0..seconds
+  // posSeg(s) = LED12 + s (con wrap)
+  // El color real de cada segundo lo definiremos después (degradado)
+
+  // 6) Cálculo de horas en aro 5 (24 LEDs, 3 LEDs por hora, anclado a 6:00 -> LED 1)
+
+  const uint8_t aroH = RELOJ_ARO_HOURS;  // aro 5
+  int lenAroH = ringLength[aroH - 1];    // debería ser 24
+
+  int centerH = 1; // valor por defecto seguro
+
+  if (lenAroH > 0) {
+    // k = 0 -> 6h, k=1 -> 7h, ..., k=11 -> 5h
+    int k;
+    if (hour12 >= 6) k = hour12 - 6;    // 6..12 -> 0..6
+    else             k = (hour12 + 12) - 6; // 1..5 -> 7..11
+
+    // LED central base (1-based). 6:00 -> center=1, 7:00->3, ..., 12:00->13
+    centerH = 1 + k * 2;
+
+    // Ajuste circular por si acaso
+    while (centerH > lenAroH) centerH -= lenAroH;
+    while (centerH < 1)       centerH += lenAroH;
+  }
+
+  int leftH  = centerH - 1;
+  int rightH = centerH + 1;
+  if (leftH < 1)        leftH = lenAroH;
+  if (rightH > lenAroH) rightH = 1;
+
+  // 7) (TEMPORAL) Pintar algo sencillo para comprobar geometría:
+  //    - Horas: aro 5, centerH en blanco, left/right en gris
+  //    - Minuto: aro 1, posMin en verde
+  //    - Segundos: aro 1, rastro en azul
+
+  // Horas en aro 5
+  if (lenAroH > 0) {
+    // Central (blanco)
+    int idxCenter = ringLedIndex(aroH - 1, centerH - 1);
+    leds[idxCenter] = CRGB::White;
+
+    // Laterales (gris)
+    int idxLeft  = ringLedIndex(aroH - 1, leftH - 1);
+    int idxRight = ringLedIndex(aroH - 1, rightH - 1);
+    leds[idxLeft]  = CRGB(80, 80, 80);
+    leds[idxRight] = CRGB(80, 80, 80);
+  }
+
+  // Minuto en aro 1 (verde)
+  int idxMin = ringLedIndex(aroSM - 1, posMin - 1);
+  leds[idxMin] = CRGB::Green;
+
+  // Segundos (rastro azul simple, sin todavía degradado ni prioridades)
+  for (int s = 0; s <= seconds; s++) {
+    int posSeg = RELOJ_LED12_ARO1 + s;
+    while (posSeg > lenAroSM) posSeg -= lenAroSM;
+    while (posSeg < 1)        posSeg += lenAroSM;
+
+    int idxSeg = ringLedIndex(aroSM - 1, posSeg - 1);
+    // De momento pisamos sin prioridades; luego afinaremos
+    leds[idxSeg] = CRGB::Blue;
   }
 
   FastLED.setBrightness(brightness);
