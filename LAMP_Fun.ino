@@ -947,104 +947,227 @@ void updateBarridoEffect() {
   FastLED.show();
 }
 
+
+// ------------ Efecto PERSIANA basado en franjas discretas ------------
+
+// Listas de LEDs por franja y por aro (índices 1-based dentro de cada aro)
+
+const uint8_t PERSIANA_F1_R1[] = {1,2,3,4,5,6,7,54,55,56,57,58,59, 60};
+const uint8_t PERSIANA_F1_R2[] = {1,2,3,4,46,47,48};
+
+const uint8_t PERSIANA_F2_R1[] = {8,9,10,52,53,54};
+const uint8_t PERSIANA_F2_R2[] = {5,6,7,43,44,45};
+const uint8_t PERSIANA_F2_R3[] = {1,2,3,4,5,37,38,39,40};
+const uint8_t PERSIANA_F2_R4[] = {1,2,3,31,32};
+
+const uint8_t PERSIANA_F3_R1[] = {11,12,50,51};
+const uint8_t PERSIANA_F3_R2[] = {8,9,10,40,41,42};
+const uint8_t PERSIANA_F3_R3[] = {6,7,8,34,35,36};
+const uint8_t PERSIANA_F3_R4[] = {4,5,6,28,29,30};
+const uint8_t PERSIANA_F3_R5[] = {1,2,3,4,22,23,24};
+const uint8_t PERSIANA_F3_R6[] = {1,2,16};
+
+const uint8_t PERSIANA_F4_R1[] = {13,14,48,49};
+const uint8_t PERSIANA_F4_R2[] = {11,12,38,39};
+const uint8_t PERSIANA_F4_R3[] = {9,10,32,33};
+const uint8_t PERSIANA_F4_R4[] = {7,8,26,27};
+const uint8_t PERSIANA_F4_R5[] = {5,6,20,21};
+const uint8_t PERSIANA_F4_R6[] = {3,4,14,15};
+const uint8_t PERSIANA_F4_R7[] = {1,2,3,11,12};
+const uint8_t PERSIANA_F4_R8[] = {1,2,8};
+
+const uint8_t PERSIANA_F5_R1[] = {15,16,17,45,46,47};
+const uint8_t PERSIANA_F5_R2[] = {13,37};
+const uint8_t PERSIANA_F5_R3[] = {11,12,30,31};
+const uint8_t PERSIANA_F5_R4[] = {9,25};
+const uint8_t PERSIANA_F5_R5[] = {7,19};
+const uint8_t PERSIANA_F5_R6[] = {5,13};
+const uint8_t PERSIANA_F5_R7[] = {4,10};
+const uint8_t PERSIANA_F5_R8[] = {3,4,6,7};
+const uint8_t PERSIANA_F5_R9[] = {1};
+
+const uint8_t PERSIANA_F6_R1[] = {18,19,43,44};
+const uint8_t PERSIANA_F6_R2[] = {14,15,16,34,35,36};
+const uint8_t PERSIANA_F6_R3[] = {13,14,28,29};
+const uint8_t PERSIANA_F6_R4[] = {10,11,23,24};
+const uint8_t PERSIANA_F6_R5[] = {8,9,17,18};
+const uint8_t PERSIANA_F6_R6[] = {6,7,11,12};
+const uint8_t PERSIANA_F6_R7[] = {5,6,7,8,9};
+const uint8_t PERSIANA_F6_R8[] = {5};
+
+const uint8_t PERSIANA_F7_R1[] = {20,21,22,40,41,42};
+const uint8_t PERSIANA_F7_R2[] = {17,18,32,33};
+const uint8_t PERSIANA_F7_R3[] = {15,16,26,27};
+const uint8_t PERSIANA_F7_R4[] = {12,13,14,20,21,22};
+const uint8_t PERSIANA_F7_R5[] = {10,11,12,13,14,15,16};
+const uint8_t PERSIANA_F7_R6[] = {8,9,10};
+
+const uint8_t PERSIANA_F8_R1[] = {23,24,25,37,38,39};
+const uint8_t PERSIANA_F8_R2[] = {19,20,21,29,30,31};
+const uint8_t PERSIANA_F8_R3[] = {17,18,19,20,21,22,23,24,25};
+const uint8_t PERSIANA_F8_R4[] = {15,16,17,18,19};
+
+const uint8_t PERSIANA_F9_R1[] = {26,27,28,29,30,31,32,33,34,35,36};
+const uint8_t PERSIANA_F9_R2[] = {22,23,24,25,26,27,28};
+
+
+// Pequeña estructura para describir qué arrays usa cada franja
+struct PersianaBandAro {
+  const uint8_t* leds;
+  uint8_t count;
+};
+
+// Para cada franja (1..9) y aro (1..9), qué lista usamos (o ninguna)
+const PersianaBandAro persianaBands[9][9] = {
+  // Franja 1 (índice 0)
+  {
+    {PERSIANA_F1_R1, sizeof(PERSIANA_F1_R1)},  // aro 1
+    {PERSIANA_F1_R2, sizeof(PERSIANA_F1_R2)},  // aro 2
+    {nullptr, 0}, {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}
+  },
+  // Franja 2
+  {
+    {PERSIANA_F2_R1, sizeof(PERSIANA_F2_R1)},
+    {PERSIANA_F2_R2, sizeof(PERSIANA_F2_R2)},
+    {PERSIANA_F2_R3, sizeof(PERSIANA_F2_R3)},
+    {PERSIANA_F2_R4, sizeof(PERSIANA_F2_R4)},
+    {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}
+  },
+  // Franja 3
+  {
+    {PERSIANA_F3_R1, sizeof(PERSIANA_F3_R1)},
+    {PERSIANA_F3_R2, sizeof(PERSIANA_F3_R2)},
+    {PERSIANA_F3_R3, sizeof(PERSIANA_F3_R3)},
+    {PERSIANA_F3_R4, sizeof(PERSIANA_F3_R4)},
+    {PERSIANA_F3_R5, sizeof(PERSIANA_F3_R5)},
+    {PERSIANA_F3_R6, sizeof(PERSIANA_F3_R6)},
+    {nullptr,0}, {nullptr,0}, {nullptr,0}
+  },
+  // Franja 4
+  {
+    {PERSIANA_F4_R1, sizeof(PERSIANA_F4_R1)},
+    {PERSIANA_F4_R2, sizeof(PERSIANA_F4_R2)},
+    {PERSIANA_F4_R3, sizeof(PERSIANA_F4_R3)},
+    {PERSIANA_F4_R4, sizeof(PERSIANA_F4_R4)},
+    {PERSIANA_F4_R5, sizeof(PERSIANA_F4_R5)},
+    {PERSIANA_F4_R6, sizeof(PERSIANA_F4_R6)},
+    {PERSIANA_F4_R7, sizeof(PERSIANA_F4_R7)},
+    {PERSIANA_F4_R8, sizeof(PERSIANA_F4_R8)},
+    {nullptr,0}
+  },
+  // Franja 5
+  {
+    {PERSIANA_F5_R1, sizeof(PERSIANA_F5_R1)},
+    {PERSIANA_F5_R2, sizeof(PERSIANA_F5_R2)},
+    {PERSIANA_F5_R3, sizeof(PERSIANA_F5_R3)},
+    {PERSIANA_F5_R4, sizeof(PERSIANA_F5_R4)},
+    {PERSIANA_F5_R5, sizeof(PERSIANA_F5_R5)},
+    {PERSIANA_F5_R6, sizeof(PERSIANA_F5_R6)},
+    {PERSIANA_F5_R7, sizeof(PERSIANA_F5_R7)},
+    {PERSIANA_F5_R8, sizeof(PERSIANA_F5_R8)},
+    {PERSIANA_F5_R9, sizeof(PERSIANA_F5_R9)}
+  },
+  // Franja 6
+  {
+    {PERSIANA_F6_R1, sizeof(PERSIANA_F6_R1)},
+    {PERSIANA_F6_R2, sizeof(PERSIANA_F6_R2)},
+    {PERSIANA_F6_R3, sizeof(PERSIANA_F6_R3)},
+    {PERSIANA_F6_R4, sizeof(PERSIANA_F6_R4)},
+    {PERSIANA_F6_R5, sizeof(PERSIANA_F6_R5)},
+    {PERSIANA_F6_R6, sizeof(PERSIANA_F6_R6)},
+    {PERSIANA_F6_R7, sizeof(PERSIANA_F6_R7)},
+    {PERSIANA_F6_R8, sizeof(PERSIANA_F6_R8)},
+    {nullptr,0}
+  },
+  // Franja 7
+  {
+    {PERSIANA_F7_R1, sizeof(PERSIANA_F7_R1)},
+    {PERSIANA_F7_R2, sizeof(PERSIANA_F7_R2)},
+    {PERSIANA_F7_R3, sizeof(PERSIANA_F7_R3)},
+    {PERSIANA_F7_R4, sizeof(PERSIANA_F7_R4)},
+    {PERSIANA_F7_R5, sizeof(PERSIANA_F7_R5)},
+    {PERSIANA_F7_R6, sizeof(PERSIANA_F7_R6)},
+    {nullptr,0}, {nullptr,0}, {nullptr,0}
+  },
+  // Franja 8
+  {
+    {PERSIANA_F8_R1, sizeof(PERSIANA_F8_R1)},
+    {PERSIANA_F8_R2, sizeof(PERSIANA_F8_R2)},
+    {PERSIANA_F8_R3, sizeof(PERSIANA_F8_R3)},
+    {PERSIANA_F8_R4, sizeof(PERSIANA_F8_R4)},
+    {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}
+  },
+  // Franja 9
+  {
+    {PERSIANA_F9_R1, sizeof(PERSIANA_F9_R1)},
+    {PERSIANA_F9_R2, sizeof(PERSIANA_F9_R2)},
+    {nullptr,0}, {nullptr,0}, {nullptr,0},
+    {nullptr,0}, {nullptr,0}, {nullptr,0}, {nullptr,0}
+  }
+};
+
+
+// Efecto PERSIANA con bandas discretas
 void updatePersianaEffect() {
   if (!persianaEffectActive) return;
 
   unsigned long now = millis();
 
-  // Intervalo base de refresco, similar a BARRIDO/COMETA
   const uint16_t intervalMs = 20;
   if (now - persianaLastUpdate < intervalMs) return;
   unsigned long dtMs = now - persianaLastUpdate;
   persianaLastUpdate = now;
 
-  // Duración total del ciclo PERSIANA (subida + bajada) en ms
+  // Duración total del ciclo (subida + bajada) en ms
   uint16_t tX10 = persianaCycleTimesX10[persianaCycleIndex]; // décimas de segundo
   float cycleSeconds = tX10 / 10.0f;
-  if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;              // mínimo 0.2 s
+  if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;
   float cycleMs = cycleSeconds * 1000.0f;
 
-  // Avanzar fase normalizada 0..1
+  // Avance de fase 0..1
   float dPhase = (float)dtMs / cycleMs;
   persianaPhase += dPhase;
-  if (persianaPhase > 1.0f) {
-    persianaPhase -= 1.0f; // wrap al principio del ciclo
-  }
+  if (persianaPhase > 1.0f) persianaPhase -= 1.0f;
 
-  // La persiana "vive" en la mitad inferior (entre LED 1 y LED 31 aprox del aro externo)
-  const int EXT_RING = 0;          // aro externo (60 LEDs)
-  const int EXT_LEN  = ringLength[EXT_RING];
-  const int BOTTOM   = 1;          // LED 1 ~ parte baja
-  const int TOP      = 31;         // LED 31 ~ mitad superior
-  const int HEIGHT   = TOP - BOTTOM; // 30 pasos efectivos
+  // Mapeamos fase 0..1 a un índice entero 0..(9*2-2) para subir y bajar:
+  // 0..8 -> subida franja 1..9
+  // 9..16 -> bajada franja 8..1
+  const int N_FRANJAS = 9;
+  int stepsTotal = (N_FRANJAS * 2) - 2; // 16
+  int stepIndex = (int)(persianaPhase * (float)stepsTotal + 0.5f);
+  if (stepIndex > stepsTotal) stepIndex = stepsTotal;
 
-  // Dividimos el ciclo en tres zonas:
-  // 0.0 - 0.5: subida y relleno (de una lama a todas, de start arriba a end abajo)
-  // 0.5 - 0.75: subida final (la estructura completa se desplaza hacia arriba)
-  // 0.75 - 1.0: bajada completa (estructura se desplaza hacia abajo)
-  float p = persianaPhase;
-
-  int topPos    = TOP;
-  int bottomPos = BOTTOM;
-
-  if (p < 0.5f) {
-    // Fase 1: rellenar la persiana de start arriba a end abajo
-    float f = p / 0.5f; // 0..1
-    // top siempre en TOP, bottom desciende desde TOP hacia BOTTOM
-    topPos    = TOP;
-    bottomPos = TOP - (int)(f * (float)HEIGHT);
-    if (bottomPos < BOTTOM) bottomPos = BOTTOM;
-  } else if (p < 0.75f) {
-    // Fase 2: subir todo el bloque hasta que solo queda la lama de color final en TOP
-    float f = (p - 0.5f) / 0.25f; // 0..1
-    // En el final de fase 1 teníamos [BOTTOM, TOP] ocupado.
-    // Ahora desplazamos ambos límites hacia arriba hasta que bottom se acerque a TOP.
-    int span = HEIGHT;
-    int shift = (int)(f * (float)span);
-    topPos    = TOP + shift;
-    bottomPos = BOTTOM + shift;
+  // Calculamos el índice de franja superior (0..8) según subimos o bajamos
+  int topBand;
+  bool descending = (stepIndex >= (N_FRANJAS - 1));
+  if (!descending) {
+    // subiendo: 0..8 => topBand = stepIndex
+    topBand = stepIndex;
   } else {
-    // Fase 3: bajada desde solo final en TOP hasta todo apagado con start en BOTTOM
-    float f = (p - 0.75f) / 0.25f; // 0..1
-    // Al inicio de esta fase tenemos bottom/top muy arriba;
-    // los llevamos hacia abajo hasta [BOTTOM, TOP] y luego desaparece.
-    int span = HEIGHT;
-    int shift = (int)((1.0f - f) * (float)span);
-    topPos    = BOTTOM + span; // = TOP
-    bottomPos = BOTTOM + shift;
-    if (bottomPos > TOP) bottomPos = TOP;
+    // bajando: 8..16 => topBand =  (N_FRANJAS - 1) - (stepIndex - (N_FRANJAS - 1))
+    int k = stepIndex - (N_FRANJAS - 1); // 0..7
+    topBand = (N_FRANJAS - 1) - k;       // 8..1
   }
+  if (topBand < 0) topBand = 0;
+  if (topBand > (N_FRANJAS - 1)) topBand = N_FRANJAS - 1;
 
-  // Si bottomPos supera topPos, no dibujamos nada
-  if (bottomPos > topPos) {
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    FastLED.setBrightness(brightness);
-    FastLED.show();
-    return;
-  }
-
-  // Limpiamos todo antes de dibujar la persiana
+  // Limpiamos todos los LEDs
   fill_solid(leds, NUM_LEDS, CRGB::Black);
 
-  // Convertimos colores inicio/fin a RGB
+  // Colores del degradado (de abajo a arriba del bloque)
   uint8_t rs, gs, bs;
   uint8_t re, ge, be;
   rgbFrom565(persianaColorStart, rs, gs, bs);
   rgbFrom565(persianaColorEnd,   re, ge, be);
 
-  // Para cada "altura" entre bottomPos y topPos, dibujamos una lama horizontal
-  int totalLamas = topPos - bottomPos + 1;
-  if (totalLamas < 1) {
-    FastLED.setBrightness(brightness);
-    FastLED.show();
-    return;
-  }
+  // Recorremos las 9 franjas desde la inferior (0) hasta la superior (topBand)
+  for (int rel = 0; rel <= topBand; rel++) {
+    int bandIndex = rel;  // franja 0..topBand (1..N en tu descripción)
 
-  for (int y = bottomPos; y <= topPos; y++) {
-    int idxLama = y - bottomPos;       // 0..(totalLamas-1)
-    float t = (float)idxLama / (float)(totalLamas - 1 > 0 ? totalLamas - 1 : 1); // 0..1
-
-    // Interpolamos color vertical: t=0 -> colorEnd (abajo), t=1 -> colorStart (arriba)
+    // Color para esta franja dentro del degradado:
+    // franja 0 (más baja) -> color final
+    // franja topBand (más alta visible) -> color inicial
+    float t = (topBand == 0) ? 1.0f : (float)rel / (float)topBand;
     float rf = re + (rs - re) * t;
     float gf = ge + (gs - ge) * t;
     float bf = be + (bs - be) * t;
@@ -1052,40 +1175,31 @@ void updatePersianaEffect() {
     uint8_t g = (uint8_t)gf;
     uint8_t b = (uint8_t)bf;
 
-    // Calculamos ángulos para una "línea horizontal" en esta altura.
-    // En el aro externo, y va de 1 a 31; lo mapeamos a un ángulo relativo 0..pi (media circunferencia).
-    float rel = (float)(y - BOTTOM) / (float)(HEIGHT > 0 ? HEIGHT : 1); // 0 abajo, 1 arriba
-    float angle = rel * 3.1415926f; // 0..pi
+    // Encendemos todos los LEDs de esta franja (según tus listas)
+    for (int aro = 0; aro < 9; aro++) {
+      const PersianaBandAro& ba = persianaBands[bandIndex][aro];
+      if (!ba.leds || ba.count == 0) continue;
 
-    // Para cada aro, elegimos dos LEDs simétricos alrededor de la vertical
-    for (int ring = 0; ring < NUM_RINGS; ring++) {
-      int len = ringLength[ring];
-      if (len <= 1) {
-        // aro central (1 LED): lo usamos solo cuando la lama está muy arriba
-        if (rel > 0.8f) {
-          int idxCenter = ringLedIndex(ring, 0);
-          leds[idxCenter] = CRGB(r, g, b);
-        }
-        continue;
+      int len = ringLength[aro]; // número de LEDs en este aro
+      int n   = ba.count;        // número de bytes en el array
+
+      for (int i = 0; i < n; i++) {
+        uint8_t pos1 = ba.leds[i]; // 1-based
+        if (pos1 < 1 || pos1 > len) continue;
+        int idx = ringLedIndex(aro, pos1 - 1);
+        leds[idx] = CRGB(r, g, b);
       }
-
-      // Mapeamos ángulo a índice de LED.
-      // Suponemos LED 0 en "sur" y avanzamos horario.
-      float pos = angle * (float)len / (2.0f * 3.1415926f); // 0..len/2 aprox
-      int p1 = (int)pos;
-      int p2 = (len - p1) % len; // simétrico
-
-      int idx1 = ringLedIndex(ring, p1);
-      int idx2 = ringLedIndex(ring, p2);
-
-      leds[idx1] = CRGB(r, g, b);
-      leds[idx2] = CRGB(r, g, b);
     }
   }
 
   FastLED.setBrightness(brightness);
   FastLED.show();
 }
+
+
+
+
+
 
 // ----------------- Icono WiFi -----------------
 
