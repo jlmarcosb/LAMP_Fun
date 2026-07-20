@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.6.4
+// LAMP_Fun V.2.6.5
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -947,12 +947,9 @@ void updateBarridoEffect() {
   FastLED.show();
 }
 
-
 // ------------ Efecto PERSIANA basado en franjas discretas ------------
-
 // Listas de LEDs por franja y por aro (índices 1-based dentro de cada aro)
-
-const uint8_t PERSIANA_F1_R1[] = {1,2,3,4,5,6,7,54,55,56,57,58,59, 60};
+const uint8_t PERSIANA_F1_R1[] = {1,2,3,4,5,6,7,54,55,56,57,58,59,60};
 const uint8_t PERSIANA_F1_R2[] = {1,2,3,4,46,47,48};
 
 const uint8_t PERSIANA_F2_R1[] = {8,9,10,52,53,54};
@@ -1106,85 +1103,118 @@ const PersianaBandAro persianaBands[9][9] = {
   }
 };
 
-
-// Efecto PERSIANA con bandas discretas
+// Efecto PERSIANA: subida y bajada estrictamente inversas
 void updatePersianaEffect() {
   if (!persianaEffectActive) return;
 
   unsigned long now = millis();
-
   const uint16_t intervalMs = 20;
   if (now - persianaLastUpdate < intervalMs) return;
   unsigned long dtMs = now - persianaLastUpdate;
   persianaLastUpdate = now;
 
-  // Duración total del ciclo (subida + bajada) en ms
-  uint16_t tX10 = persianaCycleTimesX10[persianaCycleIndex]; // décimas de segundo
+  // Duración total del ciclo
+  uint16_t tX10 = persianaCycleTimesX10[persianaCycleIndex];   // décimas de segundo
   float cycleSeconds = tX10 / 10.0f;
   if (cycleSeconds < 0.2f) cycleSeconds = 0.2f;
   float cycleMs = cycleSeconds * 1000.0f;
 
-  // Avance de fase 0..1
+  // Fase 0..1
   float dPhase = (float)dtMs / cycleMs;
   persianaPhase += dPhase;
   if (persianaPhase > 1.0f) persianaPhase -= 1.0f;
 
-  // Mapeamos fase 0..1 a un índice entero 0..(9*2-2) para subir y bajar:
-  // 0..8 -> subida franja 1..9
-  // 9..16 -> bajada franja 8..1
   const int N_FRANJAS = 9;
-  int stepsTotal = (N_FRANJAS * 2) - 2; // 16
-  int stepIndex = (int)(persianaPhase * (float)stepsTotal + 0.5f);
-  if (stepIndex > stepsTotal) stepIndex = stepsTotal;
 
-  // Calculamos el índice de franja superior (0..8) según subimos o bajamos
-  int topBand;
-  bool descending = (stepIndex >= (N_FRANJAS - 1));
-  if (!descending) {
-    // subiendo: 0..8 => topBand = stepIndex
-    topBand = stepIndex;
+  // Fase de subida normalizada 0..1:
+  // - 0..0.5 del ciclo: subida directa
+  // - 0.5..1 del ciclo: usamos 1-p para reproducir la subida al revés (bajada)
+  float p = persianaPhase;
+  float pUp = (p <= 0.5f) ? (p / 0.5f) : ((1.0f - p) / 0.5f);  // siempre 0..1
+
+  // En pUp describimos SOLO la subida, tal como la quieres:
+  //  - tramo A: 0..1/3 → se rellenan franjas 1..9
+  //  - tramo B: 1/3..1 → bloque se desplaza, acabando en sólo franja 9
+  int firstBandUp = 0;
+  int lastBandUp  = 0;
+
+  if (pUp < 1.0f / 3.0f) {
+    // Tramo A: rellenar 1..9
+    float f = pUp / (1.0f / 3.0f);    // 0..1
+    int active = 1 + (int)floorf(f * (float)(N_FRANJAS - 1));  // 1..9
+    if (active < 1) active = 1;
+    if (active > N_FRANJAS) active = N_FRANJAS;
+    firstBandUp = 0;
+    lastBandUp  = active - 1;     // 0..8
   } else {
-    // bajando: 8..16 => topBand =  (N_FRANJAS - 1) - (stepIndex - (N_FRANJAS - 1))
-    int k = stepIndex - (N_FRANJAS - 1); // 0..7
-    topBand = (N_FRANJAS - 1) - k;       // 8..1
+    // Tramo B: desplazar bloque hasta que sólo quede franja 9
+    float f = (pUp - 1.0f / 3.0f) / (2.0f / 3.0f);  // 0..1
+    int low = (int)floorf(f * (float)(N_FRANJAS - 1));  // 0..8
+    if (low < 0) low = 0;
+    if (low > N_FRANJAS - 1) low = N_FRANJAS - 1;
+    firstBandUp = low;
+    lastBandUp  = N_FRANJAS - 1;  // 8
   }
-  if (topBand < 0) topBand = 0;
-  if (topBand > (N_FRANJAS - 1)) topBand = N_FRANJAS - 1;
+
+  // Si estamos en la primera mitad del ciclo, usamos las bandas tal cual (subida).
+  // Si estamos en la segunda mitad, interpretamos esas bandas "al revés",
+  // de forma que el patrón de LEDs se reproduzca en sentido contrario (bajada).
+  int firstBand, lastBand;
+
+  if (p <= 0.5f) {
+    // Subida: usar franjas como se han calculado
+    firstBand = firstBandUp;
+    lastBand  = lastBandUp;
+  } else {
+    // Bajada: espejo temporal exacto
+    // En la subida, las franjas efectivas son firstBandUp..lastBandUp (0..8).
+    // Para bajar, queremos que:
+    //  - cuando la subida dice "solo franja 9" (8..8), también veamos solo 9;
+    //  - cuando la subida está en "1..9", al bajar veamos de nuevo 1..9, pero
+    //    visitadas en orden temporal inverso (ya viene dado por pUp).
+    // Por geometría, las franjas "físicas" no se invierten, sólo el orden
+    // temporal, así que aquí NO cambiamos los índices, sólo repetimos su rango.
+    firstBand = firstBandUp;
+    lastBand  = lastBandUp;
+  }
+
+  if (firstBand < 0) firstBand = 0;
+  if (lastBand  > N_FRANJAS - 1) lastBand = N_FRANJAS - 1;
 
   // Limpiamos todos los LEDs
   fill_solid(leds, NUM_LEDS, CRGB::Black);
 
-  // Colores del degradado (de abajo a arriba del bloque)
+  // Colores extremos
   uint8_t rs, gs, bs;
   uint8_t re, ge, be;
-  rgbFrom565(persianaColorStart, rs, gs, bs);
-  rgbFrom565(persianaColorEnd,   re, ge, be);
+  rgbFrom565(persianaColorStart, rs, gs, bs);  // inicio
+  rgbFrom565(persianaColorEnd,   re, ge, be);  // final
 
-  // Recorremos las 9 franjas desde la inferior (0) hasta la superior (topBand)
-  for (int rel = 0; rel <= topBand; rel++) {
-    int bandIndex = rel;  // franja 0..topBand (1..N en tu descripción)
+  int bandCount = lastBand - firstBand + 1;
+  if (bandCount < 1) bandCount = 1;
 
-    // Color para esta franja dentro del degradado:
-    // franja 0 (más baja) -> color final
-    // franja topBand (más alta visible) -> color inicial
-    float t = (topBand == 0) ? 1.0f : (float)rel / (float)topBand;
-    float rf = re + (rs - re) * t;
-    float gf = ge + (gs - ge) * t;
-    float bf = be + (bs - be) * t;
+  // Pintamos franjas firstBand..lastBand
+  for (int bandIndex = firstBand; bandIndex <= lastBand; bandIndex++) {
+    int rel = bandIndex - firstBand;   // 0..bandCount-1
+    float tBlock = (bandCount <= 1) ? 1.0f : (float)rel / (float)(bandCount - 1);
+
+    // Franja más baja → color más cercano a final
+    // Franja más alta → color más cercano a inicio
+    float rf = re + (rs - re) * tBlock;
+    float gf = ge + (gs - ge) * tBlock;
+    float bf = be + (bs - be) * tBlock;
     uint8_t r = (uint8_t)rf;
     uint8_t g = (uint8_t)gf;
     uint8_t b = (uint8_t)bf;
 
-    // Encendemos todos los LEDs de esta franja (según tus listas)
+    int bandIdxArray = bandIndex;  // 0..8
+
     for (int aro = 0; aro < 9; aro++) {
-      const PersianaBandAro& ba = persianaBands[bandIndex][aro];
+      const PersianaBandAro &ba = persianaBands[bandIdxArray][aro];
       if (!ba.leds || ba.count == 0) continue;
-
-      int len = ringLength[aro]; // número de LEDs en este aro
-      int n   = ba.count;        // número de bytes en el array
-
-      for (int i = 0; i < n; i++) {
-        uint8_t pos1 = ba.leds[i]; // 1-based
+      int len = ringLength[aro];
+      for (int i = 0; i < ba.count; i++) {
+        uint8_t pos1 = ba.leds[i];   // 1-based
         if (pos1 < 1 || pos1 > len) continue;
         int idx = ringLedIndex(aro, pos1 - 1);
         leds[idx] = CRGB(r, g, b);
@@ -1195,11 +1225,6 @@ void updatePersianaEffect() {
   FastLED.setBrightness(brightness);
   FastLED.show();
 }
-
-
-
-
-
 
 // ----------------- Icono WiFi -----------------
 
@@ -1318,7 +1343,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.6.4", 120, 85);
+  tft.drawString("V.2.6.5", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -3874,7 +3899,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.6.4",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.6.5",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
