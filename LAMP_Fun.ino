@@ -259,6 +259,10 @@ const uint16_t persianaCycleTimesX10[PERSIANA_CYCLE_STEPS] = {
 
 // ----------------- Efecto RELOJ (LEDs) -----------------
 
+// Configuración de usuario para RELOJ (colores del segundero degradado)
+uint16_t relojColorStart = 0x001F; // por defecto, azul
+uint16_t relojColorEnd   = 0x07FF; // por defecto, cian
+
 // Flag global: ¿el efecto RELOJ está activo?
 bool relojEffectActive = false;
 
@@ -461,6 +465,12 @@ void loadConfig() {
   persianaCycleIndex = prefs.getUChar ("perCi", 4);      // índice por defecto 1 s
   if (persianaCycleIndex >= PERSIANA_CYCLE_STEPS) persianaCycleIndex = PERSIANA_CYCLE_STEPS - 1;
 
+  // Config RELOJ (LEDs)
+  relojColorStart = prefs.getUShort("relC0", 0x001F); // azul por defecto
+  relojColorEnd   = prefs.getUShort("relC1", 0x07FF); // cian por defecto
+  relojCycleIndex = prefs.getUChar ("relCi", 0);      // 0..10 (0 = fondo estático)
+  if (relojCycleIndex >= RELOJ_CYCLE_COUNT) relojCycleIndex = RELOJ_CYCLE_COUNT - 1;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -518,6 +528,11 @@ void saveConfigBasic() {
   prefs.putUShort("perC0", persianaColorStart);
   prefs.putUShort("perC1", persianaColorEnd); 
   prefs.putUChar ("perCi", persianaCycleIndex);
+
+  // Config RELOJ (LEDs)
+  prefs.putUShort("relC0", relojColorStart);
+  prefs.putUShort("relC1", relojColorEnd);
+  prefs.putUChar ("relCi", relojCycleIndex);
 
   prefs.end();
 }
