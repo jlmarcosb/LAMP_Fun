@@ -3953,63 +3953,173 @@ void drawSettingsRelojScreen() {
   lastWifiBars = -1;
   lastWifiTachado = false;
 
+  // Cabecera
   tft.fillRect(0, 0, 240, 30, TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("RELOJ", 120, 15);
+
   drawWifiSignalIcon();
 
-  tft.setTextDatum(TL_DATUM);
-  tft.setTextSize(2);
+  drawHeaderText("RELOJ");
 
-  int y1 = 50;
-  int y2 = 90;
-  int y3 = 130;
-  int y4 = 180;
+  // --- Slider de color con dos knobs ---
 
-  auto drawLabel = [&](const char* txt, int y, bool selected) {
-    if (selected) {
-      tft.fillRect(10, y - 2, 220, 24, TFT_DARKGREY);
-      tft.setTextColor(TFT_NAVY, TFT_DARKGREY);
-    } else {
-      tft.fillRect(10, y - 2, 220, 24, TFT_BLACK);
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    }
-    tft.drawString(txt, 14, y);
-  };
+  int sliderX = 14;
+  int sliderY = 80;
+  int sliderW = 212;
+  int sliderH = 18;
 
-  drawLabel("Seg inicio", y1, relojFocus == RELOJ_FOCUS_START);
-  drawLabel("Seg final",  y2, relojFocus == RELOJ_FOCUS_END);
-  drawLabel("Ciclo (s)",  y3, relojFocus == RELOJ_FOCUS_CYCLE);
-  drawLabel("Iniciar",    y4, relojFocus == RELOJ_FOCUS_BUTTON);
+  // Fondo del slider (mismo gradiente de efectos)
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
 
-  // Muestras de color como pequeños recuadros a la derecha
-  int boxX = 190;
-  int boxW = 30;
-  int boxH = 18;
+  // Contorno del slider
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
 
-  uint8_t r, g, b;
+  // Líneas "N" y "B" arriba
+  int gapAboveSlider = 5;
+  int markerHeight   = 20;
+  int bottomY        = sliderY - gapAboveSlider;
+  int topY           = bottomY - markerHeight;
 
-  // Color inicio
-  rgbFrom565(relojColorStart, r, g, b);
-  uint16_t cStart = tft.color565(r, g, b);
-  tft.fillRect(boxX, y1, boxW, boxH, cStart);
+  tft.drawFastVLine(sliderX,               topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
 
-  // Color final
-  rgbFrom565(relojColorEnd, r, g, b);
-  uint16_t cEnd = tft.color565(r, g, b);
-  tft.fillRect(boxX, y2, boxW, boxH, cEnd);
-
-  // Valor de ciclo
-  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%2d s", relojCycleIndex);
-  tft.drawString(buf, 160, y3);
+  tft.drawString("N", sliderX,               topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
 
-  tft.setTextSize(1);
-  tft.drawString("0 = fondo fijo", 20, y3 + 22);
+  // Knobs
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 14;
+
+  // Knob inicio
+  int xStart = sliderX + relojKnobStartPos;
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)relojKnobStartPos, rr, gg, bb);
+    tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+  }
+
+  // Knob final
+  int xEnd = sliderX + relojKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  {
+    uint8_t rr2, gg2, bb2;
+    uint16_t c2 = colorFromSliderEffects((uint8_t)relojKnobEndPos, rr2, gg2, bb2);
+
+    if (relojKnobEndPos >= 211) {
+      rr2 = 255;
+      gg2 = 255;
+      bb2 = 255;
+      c2  = tft.color565(rr2, gg2, bb2);
+    }
+
+    tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+  }
+
+  // --- Texto RGB del knob activo ---
+  uint16_t activeColor = (relojFocus == RELOJ_FOCUS_END) ? relojColorEnd : relojColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "R:%d G:%d B:%d", r, g, b);
+  tft.drawString(buf, 120, sliderY + sliderH + 14);
+
+  // --- Cajitas de color inicio / final ---
+
+  int boxW = 60;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  tft.fillRect(boxX0 - 12, boxY - 2, (boxW + 6) * 2, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (relojFocus == RELOJ_FOCUS_START) {
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
+  }
+  tft.setTextDatum(ML_DATUM);
+  if (relojFocus == RELOJ_FOCUS_END) {
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
+  }
+
+  // Caja inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, relojColorStart);
+
+  // Caja final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = relojColorEnd;
+  if (relojKnobEndPos >= 211) {
+    boxEndColor = tft.color565(255, 255, 255);
+  }
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+
+  // --- Ciclo ---
+
+  int cycleY = boxY + boxH + 20;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.fillRect(0, cycleY - 10, 240, 24, TFT_BLACK);
+
+  if (relojFocus == RELOJ_FOCUS_CYCLE) {
+    tft.setTextDatum(MR_DATUM);
+    tft.drawString(">", 50, cycleY);
+  }
+
+  uint16_t tX10 = relojCycleTimesX10[relojCycleIndex];
+  char bufC[16];
+  if (tX10 < 10) {
+    snprintf(bufC, sizeof(bufC), "0.%d", tX10);
+  } else if (tX10 < 100) {
+    snprintf(bufC, sizeof(bufC), "%d.%d", tX10 / 10, tX10 % 10);
+  } else {
+    snprintf(bufC, sizeof(bufC), "%d", tX10 / 10);
+  }
+
+  char lineC[24];
+  snprintf(lineC, sizeof(lineC), "Ciclo: %s", bufC);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(lineC, 120, cycleY);
+
+  // --- Botón Iniciar ---
+
+  int btnY = cycleY + 28;
+  int btnW = 100;
+  int btnH = 26;
+  int btnX = (240 - btnW) / 2;
+
+  bool focusedButton = (relojFocus == RELOJ_FOCUS_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnText = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+  tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(btnText, btnFill);
+  tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
 // ---------- Menús WiFi ----------
@@ -5195,6 +5305,84 @@ void loop() {
         saveConfigBasic();
         if (persianaEffectActive) {
           stopPersianaEffect();
+        }
+        // Volver a la lista de efectos
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_RELOJ: {
+      // Pantalla de configuración de RELOJ
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+
+        if (relojFocus == RELOJ_FOCUS_START) {
+          int step = 5;
+          relojKnobStartPos += dir * step;
+          if (relojKnobStartPos < 0)   relojKnobStartPos = 0;
+          if (relojKnobStartPos > 211) relojKnobStartPos = 211;
+
+          uint8_t rr, gg, bb;
+          // Color de inicio del segundero, usando el mismo gradiente de efectos
+          uint16_t c = colorFromSliderEffects((uint8_t)relojKnobStartPos, rr, gg, bb);
+          relojColorStart = c;
+          saveConfigBasic();
+          drawSettingsRelojScreen();
+        }
+        else if (relojFocus == RELOJ_FOCUS_END) {
+          int step = 5;
+          relojKnobEndPos += dir * step;
+          if (relojKnobEndPos < 0)   relojKnobEndPos = 0;
+          if (relojKnobEndPos > 211) relojKnobEndPos = 211;
+
+          uint8_t rr2, gg2, bb2;
+          uint16_t c2 = colorFromSliderEffects((uint8_t)relojKnobEndPos, rr2, gg2, bb2);
+          // Igual que en PERSIANA, el último paso fuerza blanco puro
+          if (relojKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255; 
+            bb2 = 255;
+            c2  = tft.color565(rr2, gg2, bb2);
+          }
+          relojColorEnd = c2;
+          saveConfigBasic();
+          drawSettingsRelojScreen();
+        }
+        else if (relojFocus == RELOJ_FOCUS_CYCLE) {
+          int idx = (int)relojCycleIndex + dir;
+          if (idx < 0) idx = 0;
+          if (idx >= RELOJ_CYCLE_COUNT) idx = RELOJ_CYCLE_COUNT - 1;
+
+          if (idx != relojCycleIndex) {
+            relojCycleIndex = (uint8_t)idx;
+            saveConfigBasic();
+            drawSettingsRelojScreen();
+          }
+        }
+        // RELOJ_FOCUS_BUTTON: el giro no hace nada
+      }
+
+      if (encButtonFalling) {
+        if (relojFocus == RELOJ_FOCUS_BUTTON) {
+          // Lanzar efecto RELOJ y volver al reloj principal
+          startRelojEffect();
+          currentScreen = SCREEN_CLOCK;
+          drawClockScreenFull();
+        } else {
+          // Ciclo de focos START -> END -> CYCLE -> BUTTON -> START
+          relojFocus = (RelojFocus)((relojFocus + 1) % 4);
+          drawSettingsRelojScreen();
+        }
+      }
+
+      if (btn2Falling) {
+        saveConfigBasic();
+        if (relojEffectActive) {
+          stopRelojEffect();
         }
         // Volver a la lista de efectos
         currentScreen = SCREEN_SETTINGS_EFFECTS;
