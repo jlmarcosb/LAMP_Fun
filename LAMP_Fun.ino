@@ -331,8 +331,14 @@ RelojFocus relojFocus = RELOJ_FOCUS_START;
 
 // Inicializar posiciones de sliders de RELOJ a partir de colores actuales
 void initRelojSliderPositions() {
-  relojKnobStartPos = sliderPosFromColor(relojColorStart);
-  relojKnobEndPos   = sliderPosFromColor(relojColorEnd);
+  relojKnobStartPos = sliderPosFromColorEffects(relojColorStart);
+  relojKnobEndPos   = sliderPosFromColorEffects(relojColorEnd);
+
+  if (relojKnobStartPos < 0)   relojKnobStartPos = 0;
+  if (relojKnobStartPos > 211) relojKnobStartPos = 211;
+
+  if (relojKnobEndPos < 0)   relojKnobEndPos = 0;
+  if (relojKnobEndPos > 211) relojKnobEndPos = 211;
 }
 
 // Prototipos de funciones del efecto RELOJ
@@ -5715,6 +5721,8 @@ void loop() {
       updateBarridoEffect();
     } else if (persianaEffectActive) {
       updatePersianaEffect();
+    } else if (relojEffectActive) {
+      updateRelojEffect();
     }
     // futuros efectos: else if (otroEffectActive) update...
   }
