@@ -341,11 +341,6 @@ void initRelojSliderPositions() {
   if (relojKnobEndPos > 211) relojKnobEndPos = 211;
 }
 
-// Prototipos de funciones del efecto RELOJ
-// void startRelojEffect();
-// void stopRelojEffect();
-// void updateRelojEffect();
-
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -1547,40 +1542,61 @@ void updateRelojEffect() {
   // Posición del segundo actual en aro 1 (0-based)
   int posSec0 = ((int)RELOJ_LED12_ARO1 - 1 + second) % 60;
 
-  // Definimos longitud de rastro: por ejemplo 60 segundos completos hacia atrás
+  // Definimos longitud de rastro: por ejemplo 60 segundos hacia atrás
   const int TAIL_LEN = 60;
 
-  for (int t = 0; t <= TAIL_LEN; t++) {
-    int s = second - t;
-    if (s < 0) s += 60 * ((-s) / 60 + 1);
-    s %= 60;
-    int pos0 = ((int)RELOJ_LED12_ARO1 - 1 + s) % 60;
-    int idx  = ringLedIndex(0, pos0);
+  if (second == 0) {
+    // En el segundo 00: NO dejamos rastro.
+    // Solo encendemos el LED del segundo actual con el color inicial.
+    int idx = ringLedIndex(0, posSec0);
 
-    // Prioridad: si es el LED del minuto, no lo tocamos
-    if (idx == idxMin) continue;
-
-    // Prioridad: si es una marca de aro 1 (12/3/6/9), no lo tocamos
-    bool isQuarter = false;
-    for (int i = 0; i < 4; i++) {
-      if (pos0 == (int)RELOJ_QUARTERS_ARO1[i] - 1) {
-        isQuarter = true;
-        break;
+    // No tocar si coincide con minuto
+    if (idx != idxMin) {
+      // Tampoco tocar si es marca de aro 1
+      bool isQuarter = false;
+      for (int i = 0; i < 4; i++) {
+        if (posSec0 == (int)RELOJ_QUARTERS_ARO1[i] - 1) {
+          isQuarter = true;
+          break;
+        }
+      }
+      if (!isQuarter) {
+        leds[idx] = CRGB(rS, gS, bS);  // color inicial del degradado
       }
     }
-    if (isQuarter) continue;
+  } else {
+    // Resto de segundos: construir rastro completo
+    for (int t = 0; t <= TAIL_LEN; t++) {
+      int s = second - t;
+      if (s < 0) s += 60 * ((-s) / 60 + 1);
+      s %= 60;
+      int pos0 = ((int)RELOJ_LED12_ARO1 - 1 + s) % 60;
+      int idx  = ringLedIndex(0, pos0);
 
-    // Calculamos factor de rastro 0..1 (0 = cabeza, 1 = final)
-    float tailPos = (float)t / (float)TAIL_LEN;
-    float inv     = 1.0f - tailPos;
+      // Prioridad: si es el LED del minuto, no lo tocamos
+      if (idx == idxMin) continue;
 
-    float rf = rS * inv + rE * tailPos;
-    float gf = gS * inv + gE * tailPos;
-    float bf = bS * inv + bE * tailPos;
+      // Prioridad: si es una marca de aro 1 (12/3/6/9), no lo tocamos
+      bool isQuarter = false;
+      for (int i = 0; i < 4; i++) {
+        if (pos0 == (int)RELOJ_QUARTERS_ARO1[i] - 1) {
+          isQuarter = true;
+          break;
+        }
+      }
+      if (isQuarter) continue;
 
-    CRGB c((uint8_t)rf, (uint8_t)gf, (uint8_t)bf);
+      // Calculamos factor de rastro 0..1 (0 = cabeza, 1 = final)
+      float tailPos = (float)t / (float)TAIL_LEN;
+      float inv     = 1.0f - tailPos;
 
-    leds[idx] = c;
+      float rf = rS * inv + rE * tailPos;
+      float gf = gS * inv + gE * tailPos;
+      float bf = bS * inv + bE * tailPos;
+
+      CRGB c((uint8_t)rf, (uint8_t)gf, (uint8_t)bf);
+      leds[idx] = c;
+    }
   }
 
   // ----------------- 9) LED único del aro 9 (parpadeo al segundo) -----------------
