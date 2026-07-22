@@ -291,6 +291,9 @@ const uint16_t relojCycleTimesX10[RELOJ_CYCLE_COUNT] = {
 float relojPhase = 0.0f;
 unsigned long relojLastUpdate = 0;
 
+// Segundo en el que se arrancó el efecto RELOJ (para controlar el rastro)
+int8_t relojStartSecond = -1;
+
 // Constantes de geometría para el efecto RELOJ
 // Aro 1: 60 LEDs (segundos y minutos)
 const uint8_t RELOJ_ARO_SECONDS_MINUTES = 1;
@@ -751,10 +754,17 @@ void stopPersianaEffect() {
 void startRelojEffect() {
   stopAllEffects();
   relojEffectActive = true;
-  anyEffectActive   = true;
+  anyEffectActive = true;
+
+  // Limpiar todos los LEDs para no arrastrar nada anterior
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.setBrightness(brightness);
+  FastLED.show();
+
   // Inicializar estado de animación del fondo
-  relojPhase       = 0.0f;
-  relojLastUpdate  = millis();
+  relojPhase = 0.0f;
+  relojLastUpdate = millis();
+  relojStartSecond = -1;
 }
 
 // Parar RELOJ (usamos infraestructura común)
@@ -1382,6 +1392,10 @@ void updateRelojEffect() {
   int minute = ti.tm_min;    // 0..59
   int second = ti.tm_sec;    // 0..59
 
+  if (relojStartSecond < 0) {
+    relojStartSecond = second;
+  }
+
   bool isAM = (hour < 12);
 
   // ----------------- 2) Avanzar fase de fondo (nebulosa) -----------------
@@ -1455,11 +1469,18 @@ void updateRelojEffect() {
   }
 
   // ----------------- 5) Horas (aro 5 y aro 7) -----------------
-  // Mapeo de hora 0..23 a índice central 0..23 en aro 5
-  int hourIndex24 = hour;                // 0..23
-  int hourPosCenter5 = hourIndex24;      // 0..23 directamente
-  int hourPosLeft5   = (hourPosCenter5 - 1 + 24) % 24;
-  int hourPosRight5  = (hourPosCenter5 + 1) % 24;
+  // Reloj analógico: solo 12 horas (0..11)
+  int hour12 = hour % 12;  // 0..11
+
+  // Aro 5: 24 LEDs, central avanza de 2 en 2.
+  // Para las 6 => hour12 = 6 -> centro = 1 (como pediste),
+  // así que desplazamos la referencia 6 horas hacia atrás.
+  int hourForRing5 = (hour12 - 6 + 12) % 12;      // 0..11
+  int center1Based5 = 1 + 2 * hourForRing5;       // 1,3,5,...,23
+  int center0_5     = center1Based5 - 1;          // 0..23
+
+  int left0_5  = (center0_5 - 1 + 24) % 24;
+  int right0_5 = (center0_5 + 1) % 24;
 
   // Color de hora (de momento blanco)
   CRGB colorHourCenter = CRGB(255, 255, 255);
@@ -1471,18 +1492,20 @@ void updateRelojEffect() {
   );
 
   // Aro 5 (índice 4)
-  int idxHourCenter5 = ringLedIndex(4, hourPosCenter5);
-  int idxHourLeft5   = ringLedIndex(4, hourPosLeft5);
-  int idxHourRight5  = ringLedIndex(4, hourPosRight5);
+  int idxHourCenter5 = ringLedIndex(4, center0_5);
+  int idxHourLeft5   = ringLedIndex(4, left0_5);
+  int idxHourRight5  = ringLedIndex(4, right0_5);
 
   leds[idxHourCenter5] = colorHourCenter;
   leds[idxHourLeft5]   = colorHourSide;
   leds[idxHourRight5]  = colorHourSide;
 
-  // Aro 7 (12 LEDs): 0..11
-  int hour12 = hour % 12;  // 0..11
-  int hourPos7 = hour12;   // 0..11 directamente
-  int idxHour7 = ringLedIndex(6, hourPos7); // aro 7 = índice 6
+  // Aro 7 (12 LEDs, 1 por hora)
+  // A las 6 => LED 1, a las 7 => LED 2, etc.
+  int hourForRing7 = (hour12 - 6 + 12) % 12;  // 0..11
+  int pos0_7       = hourForRing7;            // 0..11
+  int idxHour7     = ringLedIndex(6, pos0_7); // aro 7 = índice 6
+
   leds[idxHour7] = colorHourCenter;
 
   // ----------------- 6) AM / PM en aro 8 -----------------
@@ -1530,8 +1553,8 @@ void updateRelojEffect() {
   // ----------------- 8) Segundos + rastro (aro 1) -----------------
   // Segundos comparten el mismo aro 1 que minutos y marcas, pero:
   // - No pisan el LED del minuto.
-  // - No pisan LEDs de marcas (12/3/6/9 ni 5-min).
-  // - El rastro mantiene gradiente entre relojColorStart y relojColorEnd.
+  // - No pisan LEDs de marcas (12/3/6/9).
+  // - El rastro solo se dibuja desde que se activó el efecto.
 
   // Convertimos relojColorStart y relojColorEnd a RGB
   uint8_t rS, gS, bS;
@@ -1542,17 +1565,14 @@ void updateRelojEffect() {
   // Posición del segundo actual en aro 1 (0-based)
   int posSec0 = ((int)RELOJ_LED12_ARO1 - 1 + second) % 60;
 
-  // Definimos longitud de rastro: por ejemplo 60 segundos hacia atrás
-  const int TAIL_LEN = 60;
-
-  if (second == 0) {
-    // En el segundo 00: NO dejamos rastro.
-    // Solo encendemos el LED del segundo actual con el color inicial.
+  // Si estamos justo en el segundo en que se arrancó el efecto,
+  // solo encendemos el LED actual con el color inicial, sin rastro.
+  if (second == relojStartSecond) {
     int idx = ringLedIndex(0, posSec0);
 
     // No tocar si coincide con minuto
     if (idx != idxMin) {
-      // Tampoco tocar si es marca de aro 1
+      // Tampoco si es marca de aro 1
       bool isQuarter = false;
       for (int i = 0; i < 4; i++) {
         if (posSec0 == (int)RELOJ_QUARTERS_ARO1[i] - 1) {
@@ -1561,12 +1581,23 @@ void updateRelojEffect() {
         }
       }
       if (!isQuarter) {
-        leds[idx] = CRGB(rS, gS, bS);  // color inicial del degradado
+        leds[idx] = CRGB(rS, gS, bS);  // color inicial
       }
     }
   } else {
-    // Resto de segundos: construir rastro completo
-    for (int t = 0; t <= TAIL_LEN; t++) {
+    // Resto de segundos: rastro desde relojStartSecond hasta el segundo actual
+    // Determinamos cuántos pasos hay entre relojStartSecond y second hacia atrás,
+    // teniendo en cuenta que el reloj cicla de 59 a 0.
+    int totalSteps;
+    if (second >= relojStartSecond) {
+      totalSteps = second - relojStartSecond;
+    } else {
+      totalSteps = (60 - relojStartSecond) + second;
+    }
+    if (totalSteps < 0) totalSteps = 0;
+    if (totalSteps > 59) totalSteps = 59;  // seguridad
+
+    for (int t = 0; t <= totalSteps; t++) {
       int s = second - t;
       if (s < 0) s += 60 * ((-s) / 60 + 1);
       s %= 60;
@@ -1586,8 +1617,8 @@ void updateRelojEffect() {
       }
       if (isQuarter) continue;
 
-      // Calculamos factor de rastro 0..1 (0 = cabeza, 1 = final)
-      float tailPos = (float)t / (float)TAIL_LEN;
+      // t = 0 -> color inicial; t = totalSteps -> color final
+      float tailPos = (totalSteps == 0) ? 0.0f : (float)t / (float)totalSteps;
       float inv     = 1.0f - tailPos;
 
       float rf = rS * inv + rE * tailPos;
@@ -1596,6 +1627,11 @@ void updateRelojEffect() {
 
       CRGB c((uint8_t)rf, (uint8_t)gf, (uint8_t)bf);
       leds[idx] = c;
+    }
+
+    // Si acabamos de pasar por 59→0, reiniciamos el inicio del rastro en el 0
+    if (second == 0) {
+      relojStartSecond = 0;
     }
   }
 
