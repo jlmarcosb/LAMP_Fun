@@ -294,6 +294,9 @@ unsigned long relojLastUpdate = 0;
 // Segundo en el que se arrancó el efecto RELOJ (para controlar el rastro)
 int8_t relojStartSecond = -1;
 
+// Fase de respiración para AM/PM (0..1, 4 s por ciclo)
+float relojAmPmPhase = 0.0f;
+
 // Constantes de geometría para el efecto RELOJ
 // Aro 1: 60 LEDs (segundos y minutos)
 const uint8_t RELOJ_ARO_SECONDS_MINUTES = 1;
@@ -1378,6 +1381,12 @@ void updateRelojEffect() {
   unsigned long dtMs = now - relojLastUpdate;
   relojLastUpdate = now;
 
+  // Respiración AM/PM: ciclo completo 4 s (2 s subir, 2 s bajar)
+  const float ampmCycleMs = 4000.0f;
+  float dPhaseAmpm = (float)dtMs / ampmCycleMs;  // incremento fase 0..1
+  relojAmPmPhase += dPhaseAmpm;
+  if (relojAmPmPhase > 1.0f) relojAmPmPhase -= 1.0f;
+
   // ----------------- 1) Obtener hora actual -----------------
   struct tm ti;
   if (!getAdjustedLocalTime(ti)) {
@@ -1508,16 +1517,37 @@ void updateRelojEffect() {
 
   // ----------------- 6) AM / PM en aro 8 -----------------
   // Aro 8 = índice 7, tiene 8 LEDs (1..8)
-  CRGB colorAM = CRGB(80, 160, 255);  // azul cielo
-  CRGB colorPM = CRGB(255, 80, 80);   // rojo
+  // Colores base: azul cielo para AM, rojo para PM
+  CRGB baseColorAM = CRGB(80, 160, 255);
+  CRGB baseColorPM = CRGB(255, 0, 0);
 
-  // Primero limpiamos esos 8 LEDs (dejamos fondo que hubiese, ya está debajo)
-  for (int p = 0; p < ringLength[7]; p++) {
-    int idx = ringLedIndex(7, p);
-    // No los ponemos negros: ya hay fondo debajo; simplemente los vamos a
-    // sobreescribir donde toque
-    // (si quieres borrarlos explícitamente, podrías poner Black)
+  // Factor de respiración: 0.1 .. 1.0 en 4 s (2 s subiendo, 2 s bajando)
+  float tAmp = relojAmPmPhase;          // 0..1
+  float tri;
+  if (tAmp < 0.5f) {
+    // 0..0.5 -> 0..1
+    tri = tAmp / 0.5f;
+  } else {
+    // 0.5..1 -> 1..0
+    tri = (1.0f - tAmp) / 0.5f;
   }
+  if (tri < 0.0f) tri = 0.0f;
+  if (tri > 1.0f) tri = 1.0f;
+
+  // Escalamos de 10% a 100%
+  float factor = 0.1f + 0.9f * tri;     // 0.1..1.0
+
+  // Color actual según AM o PM, con el factor aplicado
+  CRGB colorAM = CRGB(
+    (uint8_t)(baseColorAM.r * factor),
+    (uint8_t)(baseColorAM.g * factor),
+    (uint8_t)(baseColorAM.b * factor)
+  );
+  CRGB colorPM = CRGB(
+    (uint8_t)(baseColorPM.r * factor),
+    (uint8_t)(baseColorPM.g * factor),
+    (uint8_t)(baseColorPM.b * factor)
+  );
 
   if (isAM) {
     // AM: LEDs 1,2,3,4,5 (1-based)
@@ -5416,6 +5446,12 @@ void loop() {
           uint8_t rr, gg, bb;
           // Color de inicio del segundero, usando el mismo gradiente de efectos
           uint16_t c = colorFromSliderEffects((uint8_t)relojKnobStartPos, rr, gg, bb);
+          if (relojKnobStartPos >= 211) {
+            rr = 255;
+            gg = 255; 
+            bb = 255;
+            c = tft.color565(rr, gg, bb);
+          }
           relojColorStart = c;
           saveConfigBasic();
           drawSettingsRelojScreen();
