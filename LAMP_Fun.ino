@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.6.5
+// LAMP_Fun V.2.7.0
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -1489,8 +1489,8 @@ void updateRelojEffect() {
   int left0_5  = (center0_5 - 1 + 24) % 24;
   int right0_5 = (center0_5 + 1) % 24;
 
-  // Color de hora (verde intenso)
-  CRGB colorHourCenter = CRGB(0, 255, 0);
+  // Color de hora (rojo intenso)
+  CRGB colorHourCenter = CRGB(255, 0, 0);
   // Laterales atenuados (30 %)
   CRGB colorHourSide   = CRGB(
     (uint8_t)(colorHourCenter.r * 0.3f),
@@ -1568,28 +1568,39 @@ void updateRelojEffect() {
   }
 
   // ----------------- 7) Minuto (aro 1) -----------------
-  // LED 31 (1-based) es el "12" de aro 1 => pos0 = 30
-  // Queremos que minuto 0 encienda LED 31; el resto avanza horario.
-  // Mapping: posMin = (RELOJ_LED12_ARO1 - 1 + minute) % 60
+  // Minutero como aguja de 3 LEDs: central + 2 laterales atenuados
   int posMin0 = ((int)RELOJ_LED12_ARO1 - 1 + minute) % 60;
-  int idxMin  = ringLedIndex(0, posMin0); // aro 1 = 0
+  int posMinPrev0 = (posMin0 - 1 + 60) % 60;
+  int posMinNext0 = (posMin0 + 1) % 60;
+
+  int idxMin      = ringLedIndex(0, posMin0);      // LED central
+  int idxMinPrev  = ringLedIndex(0, posMinPrev0);  // LED anterior
+  int idxMinNext  = ringLedIndex(0, posMinNext0);  // LED siguiente
 
   // Color de minuto: rojo intenso
-  CRGB colorMinute = CRGB(255, 0, 0);
+  CRGB colorMinuteCenter = CRGB(255, 0, 0);
+  // Laterales atenuados igual que las horas (30 %)
+  CRGB colorMinuteSide = CRGB(
+    (uint8_t)(colorMinuteCenter.r * 0.3f),
+    (uint8_t)(colorMinuteCenter.g * 0.3f),
+    (uint8_t)(colorMinuteCenter.b * 0.3f)
+  );
 
-  // Si el segundero pasa por la misma posición que el minuto actual,
-  // hacemos un parpadeo rápido rojo/negro para destacar el minuto.
-  // Consideramos que la posición del segundo actual en aro 1 es:
+  // Flash cuando el segundero coincide con el minuto actual
   int posSec0_forMin = ((int)RELOJ_LED12_ARO1 - 1 + second) % 60;
 
   if (posSec0_forMin == posMin0) {
-    // Patrón de flash rápido: alternar cada ~70 ms
+    // LED central parpadea rojo/negro rápido
     bool flashOn = ((now / 70) % 2) == 0;
-    leds[idxMin] = flashOn ? colorMinute : CRGB::Black;
+    leds[idxMin] = flashOn ? colorMinuteCenter : CRGB::Black;
   } else {
-    // Segundo no coincide: minuto fijo en rojo
-    leds[idxMin] = colorMinute;
+    // LED central fijo en rojo intenso
+    leds[idxMin] = colorMinuteCenter;
   }
+
+  // Laterales siempre rojos atenuados (no parpadean)
+  leds[idxMinPrev] = colorMinuteSide;
+  leds[idxMinNext] = colorMinuteSide;
 
   // ----------------- 8) Segundos + rastro (aro 1) -----------------
   // Segundos comparten el mismo aro 1 que minutos y marcas, pero:
@@ -1645,8 +1656,8 @@ void updateRelojEffect() {
       int pos0 = ((int)RELOJ_LED12_ARO1 - 1 + s) % 60;
       int idx  = ringLedIndex(0, pos0);
 
-      // Prioridad: si es el LED del minuto, no lo tocamos
-      if (idx == idxMin) continue;
+      // Prioridad: si es uno de los LEDs del minutero (central o laterales), no lo tocamos
+      if (idx == idxMin || idx == idxMinPrev || idx == idxMinNext) continue;
 
       // Prioridad: si es una marca de aro 1 (12/3/6/9), no lo tocamos
       bool isQuarter = false;
@@ -1812,7 +1823,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.6.5", 120, 85);
+  tft.drawString("V.2.7.0", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -4123,6 +4134,13 @@ void drawSettingsRelojScreen() {
   {
     uint8_t rr, gg, bb;
     uint16_t c = colorFromSliderEffects((uint8_t)relojKnobStartPos, rr, gg, bb);
+
+    if (relojKnobStartPos >= 211) {
+      rr = 255;
+      gg = 255;
+      bb = 255;
+      c = tft.color565(rr, gg, bb);
+    }
     tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
   }
 
@@ -4543,7 +4561,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.6.5",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.7.0",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
