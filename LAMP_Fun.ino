@@ -1447,7 +1447,7 @@ void updateRelojEffect() {
   // ----------------- 4) Marcas fijas (12/3/6/9 + 5 minutos) -----------------
   // Colores de marcas (ajustables después)
   CRGB colorQuarter = CRGB(80, 80, 80);   // gris suave
-  CRGB colorFiveMin = CRGB(30, 30, 30);   // gris más tenue
+  CRGB colorFiveMin = CRGB(80, 80, 80);   // gris suave
 
   // Helper lambda: poner un LED de un aro por índice 1-based
   auto setRing1Based = [&](int ring, uint8_t pos1, const CRGB &c) {
