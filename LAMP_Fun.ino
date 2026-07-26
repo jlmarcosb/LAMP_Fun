@@ -344,6 +344,10 @@ void initRelojSliderPositions() {
   if (relojKnobEndPos > 211) relojKnobEndPos = 211;
 }
 
+// ---------- Efecto VU RADIAL ----------
+// Flags específicos (para RESPIRACION ahora, futuros efectos después)
+bool vuRadialEffectActive = false;  // NUEVO: efecto VU RADIAL (LEDs + audio en futuro)
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -497,6 +501,10 @@ void loadConfig() {
   relojCycleIndex = prefs.getUChar ("relCi", 0);      // 0..10 (0 = fondo estático)
   if (relojCycleIndex >= RELOJ_CYCLE_COUNT) relojCycleIndex = RELOJ_CYCLE_COUNT - 1;
 
+  // Config VU RADIAL (LEDs)
+  vuRadialColorStart = prefs.getUShort("vurC0", 0x001F); // azul por defecto
+  vuRadialColorEnd   = prefs.getUShort("vurC1", 0x07FF); // cian por defecto
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -559,6 +567,10 @@ void saveConfigBasic() {
   prefs.putUShort("relC0", relojColorStart);
   prefs.putUShort("relC1", relojColorEnd);
   prefs.putUChar ("relCi", relojCycleIndex);
+
+  // Config VU RADIAL (LEDs)
+  prefs.putUShort("vurC0", vuRadialColorStart);
+  prefs.putUShort("vurC1", vuRadialColorEnd);
 
   prefs.end();
 }
@@ -692,6 +704,7 @@ void stopAllEffects() {
   barridoEffectActive = false;
   persianaEffectActive = false;
   relojEffectActive = false;
+  vuRadialEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
