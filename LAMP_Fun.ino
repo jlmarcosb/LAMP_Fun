@@ -394,6 +394,7 @@ enum Screen {
   SCREEN_SETTINGS_BARRIDO,
   SCREEN_SETTINGS_PERSIANA,
   SCREEN_SETTINGS_RELOJ,
+  SCREEN_SETTINGS_VURADIAL,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -2505,7 +2506,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 5;
+const int SETTINGS_EFFECTS_ITEMS = 6;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -2650,13 +2651,14 @@ void drawSettingsEffectsScreen() {
   drawHeaderText("Efectos");
   drawWifiSignalIcon();
 
-  const int EFFECTS_ITEMS = 5;
+  const int EFFECTS_ITEMS = 6;
   const char* lines[EFFECTS_ITEMS] = {
     "RESPIRACION",
     "COMETA",
     "BARRIDO",
     "PERSIANA",
-    "RELOJ"
+    "RELOJ",
+    "VU RADIAL"
   };
 
   tft.setTextSize(2);
@@ -5152,6 +5154,13 @@ void loop() {
             initRelojSliderPositions();
             currentScreen = SCREEN_SETTINGS_RELOJ;
             drawSettingsRelojScreen();
+            break;
+
+          case 5: // VU RADIAL
+            vuRadialFocus = VURADIAL_FOCUS_START;
+            initVuRadialSliderPositions();
+            currentScreen = SCREEN_SETTINGS_VURADIAL;
+            drawSettingsVuRadialScreen();
             break;
 
         }
