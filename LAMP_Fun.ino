@@ -344,10 +344,6 @@ void initRelojSliderPositions() {
   if (relojKnobEndPos > 211) relojKnobEndPos = 211;
 }
 
-// ---------- Efecto VU RADIAL ----------
-// Flags específicos (para RESPIRACION ahora, futuros efectos después)
-bool vuRadialEffectActive = false;  // NUEVO: efecto VU RADIAL (LEDs + audio en futuro)
-
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -394,7 +390,6 @@ enum Screen {
   SCREEN_SETTINGS_BARRIDO,
   SCREEN_SETTINGS_PERSIANA,
   SCREEN_SETTINGS_RELOJ,
-  SCREEN_SETTINGS_VURADIAL,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -502,10 +497,6 @@ void loadConfig() {
   relojCycleIndex = prefs.getUChar ("relCi", 0);      // 0..10 (0 = fondo estático)
   if (relojCycleIndex >= RELOJ_CYCLE_COUNT) relojCycleIndex = RELOJ_CYCLE_COUNT - 1;
 
-  // Config VU RADIAL (LEDs)
-  vuRadialColorStart = prefs.getUShort("vurC0", 0x001F); // azul por defecto
-  vuRadialColorEnd   = prefs.getUShort("vurC1", 0x07FF); // cian por defecto
-
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -568,10 +559,6 @@ void saveConfigBasic() {
   prefs.putUShort("relC0", relojColorStart);
   prefs.putUShort("relC1", relojColorEnd);
   prefs.putUChar ("relCi", relojCycleIndex);
-
-  // Config VU RADIAL (LEDs)
-  prefs.putUShort("vurC0", vuRadialColorStart);
-  prefs.putUShort("vurC1", vuRadialColorEnd);
 
   prefs.end();
 }
@@ -705,7 +692,6 @@ void stopAllEffects() {
   barridoEffectActive = false;
   persianaEffectActive = false;
   relojEffectActive = false;
-  vuRadialEffectActive = false;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
@@ -2506,7 +2492,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 6;
+const int SETTINGS_EFFECTS_ITEMS = 5;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -2651,14 +2637,13 @@ void drawSettingsEffectsScreen() {
   drawHeaderText("Efectos");
   drawWifiSignalIcon();
 
-  const int EFFECTS_ITEMS = 6;
+  const int EFFECTS_ITEMS = 5;
   const char* lines[EFFECTS_ITEMS] = {
     "RESPIRACION",
     "COMETA",
     "BARRIDO",
     "PERSIANA",
-    "RELOJ",
-    "VU RADIAL"
+    "RELOJ"
   };
 
   tft.setTextSize(2);
@@ -5154,13 +5139,6 @@ void loop() {
             initRelojSliderPositions();
             currentScreen = SCREEN_SETTINGS_RELOJ;
             drawSettingsRelojScreen();
-            break;
-
-          case 5: // VU RADIAL
-            vuRadialFocus = VURADIAL_FOCUS_START;
-            initVuRadialSliderPositions();
-            currentScreen = SCREEN_SETTINGS_VURADIAL;
-            drawSettingsVuRadialScreen();
             break;
 
         }
