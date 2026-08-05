@@ -385,7 +385,7 @@ void initVuRadialSliderPositions() {
 
 // Foco de la pantalla VU RADIAL - A
 enum VuRadialAFocus {
-  VURADIAL_A_FOCUS_SENSIBILITY,
+  VURADIAL_A_FOCUS_SENSIBILITY = 0,
   VURADIAL_A_FOCUS_THRESHOLD,
   VURADIAL_A_FOCUS_SPEED,
   VURADIAL_A_FOCUS_CHANNEL,
@@ -395,9 +395,9 @@ enum VuRadialAFocus {
 VuRadialAFocus vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
 
 // Configuración de audio VU RADIAL - A
-uint8_t vuRadialSensitivity = 50;
-uint8_t vuRadialThreshold = 20;
-uint8_t vuRadialSpeed = 50;
+uint8_t vuRadialSensitivity = 50; // 0..100
+uint8_t vuRadialThreshold = 20;   // 0..100
+uint8_t vuRadialSpeed = 50;       // 0..100
 uint8_t vuRadialChannelMode = 3;  // 0=L, 1=R, 2=L+R, 3=Estéreo
 
 void initVuRadialAudioPositions() {
