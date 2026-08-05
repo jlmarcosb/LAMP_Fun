@@ -344,6 +344,45 @@ void initRelojSliderPositions() {
   if (relojKnobEndPos > 211) relojKnobEndPos = 211;
 }
 
+// ---------- Efecto VU RADIAL ----------
+
+
+// Configuración de usuario para VU RADIAL (colores del degradado)
+uint16_t vuRadialColorStart = 0x001F; // azul por defecto
+uint16_t vuRadialColorEnd   = 0x07FF; // cian por defecto
+
+
+// Flag global: ¿el efecto VU RADIAL está activo?
+bool vuRadialEffectActive = false;
+
+
+// Knobs propios del slider de VU RADIAL (para colores)
+int vuRadialKnobStartPos = 0;
+int vuRadialKnobEndPos   = 0;
+
+
+// Foco de la pantalla VU RADIAL
+enum VuRadialFocus {
+  VURADIAL_FOCUS_START,
+  VURADIAL_FOCUS_END
+};
+VuRadialFocus vuRadialFocus = VURADIAL_FOCUS_START;
+
+
+// Inicializar posiciones de sliders de VU RADIAL a partir de colores actuales
+void initVuRadialSliderPositions() {
+  vuRadialKnobStartPos = sliderPosFromColorEffects(vuRadialColorStart);
+  vuRadialKnobEndPos   = sliderPosFromColorEffects(vuRadialColorEnd);
+
+
+  if (vuRadialKnobStartPos < 0)   vuRadialKnobStartPos = 0;
+  if (vuRadialKnobStartPos > 211) vuRadialKnobStartPos = 211;
+
+
+  if (vuRadialKnobEndPos < 0)   vuRadialKnobEndPos = 0;
+  if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
+}
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
