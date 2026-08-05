@@ -383,6 +383,31 @@ void initVuRadialSliderPositions() {
   if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
 }
 
+// Foco de la pantalla VU RADIAL - A
+enum VuRadialAFocus {
+  VURADIAL_A_FOCUS_SENSIBILITY,
+  VURADIAL_A_FOCUS_THRESHOLD,
+  VURADIAL_A_FOCUS_SPEED,
+  VURADIAL_A_FOCUS_CHANNEL,
+  VURADIAL_A_FOCUS_BUTTON
+};
+
+VuRadialAFocus vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
+
+// Configuración de audio VU RADIAL - A
+uint8_t vuRadialSensitivity = 50;
+uint8_t vuRadialThreshold = 20;
+uint8_t vuRadialSpeed = 50;
+uint8_t vuRadialChannelMode = 3;  // 0=L, 1=R, 2=L+R, 3=Estéreo
+
+void initVuRadialAudioPositions() {
+  if (vuRadialSensitivity > 100) vuRadialSensitivity = 100;
+  if (vuRadialThreshold > 100) vuRadialThreshold = 100;
+  if (vuRadialSpeed > 100) vuRadialSpeed = 100;
+  if (vuRadialChannelMode > 3) vuRadialChannelMode = 3;
+  vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
+}
+
 // ----------------- Backlight TFT -----------------
 
 const int TFT_BL_FREQUENCY = 5000;
@@ -430,6 +455,7 @@ enum Screen {
   SCREEN_SETTINGS_PERSIANA,
   SCREEN_SETTINGS_RELOJ,
   SCREEN_SETTINGS_VURADIAL,
+  SCREEN_SETTINGS_VURADIAL_A,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
