@@ -563,6 +563,10 @@ void loadConfig() {
   relojCycleIndex = prefs.getUChar ("relCi", 0);      // 0..10 (0 = fondo estático)
   if (relojCycleIndex >= RELOJ_CYCLE_COUNT) relojCycleIndex = RELOJ_CYCLE_COUNT - 1;
 
+  // Config VU RADIAL - C
+  vuRadialColorStart = prefs.getUShort("vrcC0", 0x001F); // azul por defecto
+  vuRadialColorEnd = prefs.getUShort("vrcC1", 0x07FF);   // cian por defecto
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -625,6 +629,10 @@ void saveConfigBasic() {
   prefs.putUShort("relC0", relojColorStart);
   prefs.putUShort("relC1", relojColorEnd);
   prefs.putUChar ("relCi", relojCycleIndex);
+
+  // Config VU RADIAL - C
+  prefs.putUShort("vrcC0", vuRadialColorStart);
+  prefs.putUShort("vrcC1", vuRadialColorEnd);
 
   prefs.end();
 }
@@ -5327,6 +5335,13 @@ void loop() {
             initRelojSliderPositions();
             currentScreen = SCREEN_SETTINGS_RELOJ;
             drawSettingsRelojScreen();
+            break;
+
+          case 5: // VU RADIAL
+            vuRadialFocus = VURADIALFOCUSSTART;
+            initVuRadialSliderPositions();
+            currentScreen = SCREENSETTINGSVURADIAL;
+            drawSettingsVuRadialScreen();
             break;
 
         }
