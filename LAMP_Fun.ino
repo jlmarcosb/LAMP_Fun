@@ -2532,7 +2532,7 @@ int settingsMainIndex       = 0;
 const int SETTINGS_MAIN_ITEMS= 7;
 
 int settingsEffectsIndex = 0;
-const int SETTINGS_EFFECTS_ITEMS = 5;
+const int SETTINGS_EFFECTS_ITEMS = 6;
 
 int settingsColorDigitalIndex = 0;
 int settingsColorAnalogIndex  = 0;
@@ -2677,13 +2677,14 @@ void drawSettingsEffectsScreen() {
   drawHeaderText("Efectos");
   drawWifiSignalIcon();
 
-  const int EFFECTS_ITEMS = 5;
+  const int EFFECTS_ITEMS = 6;
   const char* lines[EFFECTS_ITEMS] = {
     "RESPIRACION",
     "COMETA",
     "BARRIDO",
     "PERSIANA",
-    "RELOJ"
+    "RELOJ",
+    "VU RADIAL"
   };
 
   tft.setTextSize(2);
