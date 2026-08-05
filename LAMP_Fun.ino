@@ -4296,6 +4296,127 @@ void drawSettingsRelojScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
+// ---------- Pantalla de configuración VU RADIAL ----------
+
+void drawSettingsVuRadialScreen() {
+  tft.fillScreen(TFT_BLACK);
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("VU RADIAL", 120, 15);
+  drawWifiSignalIcon();
+
+  // --- Slider de color con dos knobs ---
+  // Geometría del slider
+  int sliderX = 14;
+  int sliderY = 80;
+  int sliderW = 212;
+  int sliderH = 18;
+
+  // Dibujar fondo del slider
+  for (int i = 0; i < sliderW; i++) {
+    uint8_t rr, gg, bb;
+    uint16_t c = colorFromSliderEffects((uint8_t)i, rr, gg, bb);
+    tft.drawFastVLine(sliderX + i, sliderY, sliderH, c);
+  }
+
+  // Contorno blanco del slider
+  tft.drawRect(sliderX, sliderY, sliderW, sliderH, TFT_WHITE);
+
+  // Líneas N y B en extremos, más altas que los knobs
+  int gapAboveSlider = 5;
+  int markerHeight = 20;
+  int bottomY = sliderY - gapAboveSlider;
+  int topY = bottomY - markerHeight;
+
+  tft.drawFastVLine(sliderX, topY, markerHeight, TFT_WHITE);
+  tft.drawFastVLine(sliderX + sliderW - 1, topY, markerHeight, TFT_WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("N", sliderX, topY - 8);
+  tft.drawString("B", sliderX + sliderW - 1, topY - 8);
+
+  // Altura donde dibujar las bolitas de los knobs
+  int knobRadius = 7;
+  int knobCenterY = sliderY - 14;
+
+  // Knob inicio izquierdo
+  int xStart = sliderX + vuRadialKnobStartPos;
+  tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  uint8_t rr, gg, bb;
+  uint16_t c = colorFromSliderEffects((uint8_t)vuRadialKnobStartPos, rr, gg, bb);
+  tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
+
+  // Knob final derecho
+  int xEnd = sliderX + vuRadialKnobEndPos;
+  tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
+  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  uint8_t rr2, gg2, bb2;
+  uint16_t c2 = colorFromSliderEffects((uint8_t)vuRadialKnobEndPos, rr2, gg2, bb2);
+  if (vuRadialKnobEndPos >= 211) {
+    rr2 = 255;
+    gg2 = 255;
+    bb2 = 255;
+    c2 = tft.color565(rr2, gg2, bb2);
+  }
+  tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+
+  // --- Texto RGB del knob activo ---
+  uint16_t activeColor = (vuRadialFocus == VURADIAL_FOCUS_END) ? vuRadialColorEnd : vuRadialColorStart;
+  uint8_t r, g, b;
+  rgbFrom565(activeColor, r, g, b);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+
+  char buf32;
+  char rgbBuf[32];
+  snprintf(rgbBuf, sizeof(rgbBuf), "R%d G%d B%d", r, g, b);
+  tft.drawString(rgbBuf, 120, sliderY + sliderH + 14);
+
+  // --- Cajitas de color inicio / final ---
+  int boxW = 60;
+  int boxH = 24;
+  int boxY = sliderY + sliderH + 36;
+  int boxX0 = 120 - boxW - 6;
+  int boxX1 = 120 + 6;
+
+  // Borrar fondo de la zona
+  tft.fillRect(boxX0 - 12, boxY - 2, boxW * 2 + 24, boxH + 4, TFT_BLACK);
+
+  // Indicadores de foco alrededor de las cajas
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (vuRadialFocus == VURADIAL_FOCUS_START) {
+    tft.drawString("<", boxX0 - 4, boxY + boxH / 2);
+  }
+
+  tft.setTextDatum(ML_DATUM);
+  if (vuRadialFocus == VURADIAL_FOCUS_END) {
+    tft.drawString(">", boxX1 + boxW + 4, boxY + boxH / 2);
+  }
+
+  // Caja izquierda color inicio
+  tft.drawRect(boxX0, boxY, boxW, boxH, TFT_WHITE);
+  tft.fillRect(boxX0 + 1, boxY + 1, boxW - 2, boxH - 2, vuRadialColorStart);
+
+  // Caja derecha color final
+  tft.drawRect(boxX1, boxY, boxW, boxH, TFT_WHITE);
+  uint16_t boxEndColor = vuRadialColorEnd;
+  if (vuRadialKnobEndPos >= 211) {
+    boxEndColor = tft.color565(255, 255, 255);
+  }
+  tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+}
+
 // ---------- Menús WiFi ----------
 
 int  wifiMenuIndex    = 0;
