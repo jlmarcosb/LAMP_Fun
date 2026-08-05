@@ -429,6 +429,7 @@ enum Screen {
   SCREEN_SETTINGS_BARRIDO,
   SCREEN_SETTINGS_PERSIANA,
   SCREEN_SETTINGS_RELOJ,
+  SCREEN_SETTINGS_VURADIAL,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -5686,6 +5687,60 @@ void loop() {
           stopRelojEffect();
         }
         // Volver a la lista de efectos
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_VURADIAL: {
+      // Pantalla de configuración de VU RADIAL (solo colores inicio/fin)
+
+      if (stepDir != 0) {
+        int dir = (stepDir > 0) ? 1 : -1;
+        int step = 5;
+
+        if (vuRadialFocus == VURADIAL_FOCUS_START) {
+          vuRadialKnobStartPos += dir * step;
+          if (vuRadialKnobStartPos < 0)   vuRadialKnobStartPos = 0;
+          if (vuRadialKnobStartPos > 211) vuRadialKnobStartPos = 211;
+
+          uint8_t rr, gg, bb;
+          vuRadialColorStart = colorFromSliderEffects((uint8_t)vuRadialKnobStartPos, rr, gg, bb);
+          saveConfigBasic();
+          drawSettingsVuRadialScreen();
+
+        } else if (vuRadialFocus == VURADIAL_FOCUS_END) {
+          vuRadialKnobEndPos += dir * step;
+          if (vuRadialKnobEndPos < 0)   vuRadialKnobEndPos = 0;
+          if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
+
+          uint8_t rr2, gg2, bb2;
+          vuRadialColorEnd = colorFromSliderEffects((uint8_t)vuRadialKnobEndPos, rr2, gg2, bb2);
+          if (vuRadialKnobEndPos >= 211) {
+            rr2 = 255;
+            gg2 = 255;
+            bb2 = 255;
+            vuRadialColorEnd = tft.color565(rr2, gg2, bb2);
+          }
+
+          saveConfigBasic();
+          drawSettingsVuRadialScreen();
+        }
+      }
+
+      if (encButtonFalling) {
+        if (vuRadialFocus == VURADIAL_FOCUS_START) {
+          vuRadialFocus = VURADIAL_FOCUS_END;
+        } else {
+          vuRadialFocus = VURADIAL_FOCUS_START;
+        }
+        drawSettingsVuRadialScreen();
+      }
+
+      if (btn2Falling) {
+        saveConfigBasic();
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
