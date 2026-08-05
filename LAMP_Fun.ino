@@ -5696,7 +5696,7 @@ void loop() {
     }
 
     case SCREEN_SETTINGS_VURADIAL: {
-      // Pantalla de configuración de VU RADIAL (solo colores inicio/fin)
+      // Pantalla de configuración de VU RADIAL (color)
 
       if (stepDir != 0) {
         int dir = (stepDir > 0) ? 1 : -1;
@@ -5734,10 +5734,13 @@ void loop() {
       if (encButtonFalling) {
         if (vuRadialFocus == VURADIAL_FOCUS_START) {
           vuRadialFocus = VURADIAL_FOCUS_END;
+          drawSettingsVuRadialScreen();
         } else {
-          vuRadialFocus = VURADIAL_FOCUS_START;
+          // En el foco final: guardar y pasar a la pantalla de audio
+          saveConfigBasic();
+          currentScreen = SCREEN_SETTINGS_VURADIAL_A;
+          // drawSettingsVuRadialAudioScreen();  // la definiremos más adelante
         }
-        drawSettingsVuRadialScreen();
       }
 
       if (btn2Falling) {
