@@ -4344,7 +4344,7 @@ void drawSettingsVuRadialScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("VU RADIAL", 120, 15);
+  tft.drawString("VU RADIAL - C", 120, 15);
   drawWifiSignalIcon();
 
   // --- Slider de color con dos knobs ---
@@ -4413,9 +4413,8 @@ void drawSettingsVuRadialScreen() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
 
-  char buf32;
   char rgbBuf[32];
-  snprintf(rgbBuf, sizeof(rgbBuf), "R%d G%d B%d", r, g, b);
+  snprintf(rgbBuf, sizeof(rgbBuf), "R:%d G:%d B:%d", r, g, b);
   tft.drawString(rgbBuf, 120, sliderY + sliderH + 14);
 
   // --- Cajitas de color inicio / final ---
@@ -4432,12 +4431,12 @@ void drawSettingsVuRadialScreen() {
   tft.setTextDatum(MR_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   if (vuRadialFocus == VURADIAL_FOCUS_START) {
-    tft.drawString("<", boxX0 - 4, boxY + boxH / 2);
+    tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
   }
 
   tft.setTextDatum(ML_DATUM);
   if (vuRadialFocus == VURADIAL_FOCUS_END) {
-    tft.drawString(">", boxX1 + boxW + 4, boxY + boxH / 2);
+    tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
   }
 
   // Caja izquierda color inicio
@@ -5338,9 +5337,9 @@ void loop() {
             break;
 
           case 5: // VU RADIAL
-            vuRadialFocus = VURADIALFOCUSSTART;
+            vuRadialFocus = VURADIAL_FOCUS_START;
             initVuRadialSliderPositions();
-            currentScreen = SCREENSETTINGSVURADIAL;
+            currentScreen = SCREEN_SETTINGS_VURADIAL;
             drawSettingsVuRadialScreen();
             break;
 
