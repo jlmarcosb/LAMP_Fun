@@ -11,6 +11,490 @@
 #include "pins.h"
 #include <TFT_eSPI.h>
 #include <math.h>
+#include <ESP_I2S.h>
+
+// ----------------- Audio I2S estéreo INMP441 -----------------
+
+// Un único periférico I2S recibe las dos ranuras:
+// ranura izquierda  -> micrófono con L/R conectado a GND
+// ranura derecha    -> micrófono con L/R conectado a 3V3
+
+// Frecuencia de muestreo
+#define I2S_SAMPLE_RATE 16000
+
+// Número de frames estéreo leídos en cada bloque
+#define I2S_BUFFER_LEN 64
+
+// Estado de inicialización
+bool i2sAudioInitialized = false;
+
+// Objeto I2S moderno para los dos micrófonos INMP441.
+I2SClass audioI2S(I2S_NUM_1);
+
+// Prototipos
+bool initI2SAudio();
+void readAudioSamples(int32_t &sampleL, int32_t &sampleR);
+int16_t audioSampleToDbLevel(int32_t sample);
+void updateAudioLevels();
+
+// ----------------- Estado de audio para VU RADIAL - A -----------------
+
+// Últimas muestras leídas (crudo, sin escalar)
+int32_t audioLastSampleL = 0;
+int32_t audioLastSampleR = 0;
+
+// Nivel de audio en "dB" (0..100) para cada canal
+// 0 -> silencio, 100 -> máximo (clip)
+int16_t audioLevelDbL = 0;
+int16_t audioLevelDbR = 0;
+
+// Última lectura de nivel (para suavizado)
+int16_t audioLevelDbLPrev = 0;
+int16_t audioLevelDbRPrev = 0;
+
+// Nivel de pico retenido para el VU meter.
+// El pico sube inmediatamente y después descenderá lentamente.
+int16_t audioPeakDbL = 0;
+int16_t audioPeakDbR = 0;
+
+// Indica que la ganancia de Sensibilidad ha producido
+// un nivel superior al máximo visual de 100.
+bool audioSensitivitySaturated = false;
+
+// Tiempo de la última actualización de caída de los picos
+unsigned long audioPeakLastUpdateMillis = 0;
+
+// Tiempo de última lectura de audio
+unsigned long audioLastReadMillis = 0;
+
+// Configuración de audio VU RADIAL - A.
+// Las definiciones reales aparecen más abajo en el programa.
+extern uint8_t vuRadialSensitivity;
+extern uint8_t vuRadialThreshold;
+extern uint8_t vuRadialSpeed;
+extern uint8_t vuRadialChannelMode;
+
+// Caída lenta del indicador de pico.
+// Un punto de nivel equivale aproximadamente a 1 dB visual.
+const unsigned long AUDIO_PEAK_FALL_INTERVAL_MS = 40;
+const int16_t AUDIO_PEAK_FALL_STEP = 1;
+
+// ----------------- Escala de nivel de audio -----------------
+// El INMP441 entrega hasta 24 bits útiles.
+// Después de desplazar raw >> 8, el máximo teórico es 2^23 - 1.
+const int32_t AUDIO_MIN_DB_SAMPLE = 64;
+const int32_t AUDIO_MAX_DB_SAMPLE = 8388607;
+
+// Inicializar I2S moderno para los dos micrófonos INMP441.
+bool initI2SAudio() {
+  if (i2sAudioInitialized) {
+    return true;
+  }
+
+  // SCK/BCLK = MIC_SCK
+  // WS/LRCLK = MIC_WS
+  // DOUT    = -1, no transmitimos audio
+  // DIN     = MIC_SD
+  audioI2S.setPins(
+    MIC_SCK,
+    MIC_WS,
+    -1,
+    MIC_SD
+  );
+
+  bool ok = audioI2S.begin(
+    I2S_MODE_STD,
+    I2S_SAMPLE_RATE,
+    I2S_DATA_BIT_WIDTH_32BIT,
+    I2S_SLOT_MODE_STEREO
+  );
+
+  if (!ok) {
+    Serial.println("AUDIO: error al iniciar I2S moderno");
+    Serial.flush();
+    return false;
+  }
+
+  i2sAudioInitialized = true;
+
+  return true;
+}
+
+// Leer las muestras de audio L y R mediante la API I2S moderna.
+// Devuelve valores RMS aproximados después de desplazar
+// las 24 bits útiles del INMP441.
+void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
+  sampleL = 0;
+  sampleR = 0;
+
+  if (!i2sAudioInitialized) {
+    return;
+  }
+
+  // Cada frame estéreo contiene dos palabras de 32 bits:
+  // buffer[2*i]     -> canal izquierdo
+  // buffer[2*i + 1] -> canal derecho
+  int32_t buffer[I2S_BUFFER_LEN * 2];
+
+  // I2SClass::readBytes() devuelve el número de bytes recibidos.
+  size_t bytesRead = audioI2S.readBytes(
+    (char*)buffer,
+    sizeof(buffer)
+  );
+
+  if (bytesRead == 0) {
+    return;
+  }
+
+  int totalWords = bytesRead / sizeof(int32_t);
+  int frameCount = totalWords / 2;
+
+  if (frameCount <= 0) {
+    return;
+  }
+
+  int64_t sumL   = 0;
+  int64_t sumR   = 0;
+  int64_t sumSqL = 0;
+  int64_t sumSqR = 0;
+
+  for (int i = 0; i < frameCount; i++) {
+    int32_t rawL = buffer[2 * i];
+    int32_t rawR = buffer[2 * i + 1];
+
+    // El INMP441 utiliza 24 bits válidos dentro
+    // de una palabra de 32 bits.
+    int32_t valueL = rawL >> 8;
+    int32_t valueR = rawR >> 8;
+
+    sumL += valueL;
+    sumR += valueR;
+
+    sumSqL += (int64_t)valueL * (int64_t)valueL;
+    sumSqR += (int64_t)valueR * (int64_t)valueR;
+  }
+
+  // Calcular el valor medio para eliminar el offset DC.
+  int64_t meanL = sumL / frameCount;
+  int64_t meanR = sumR / frameCount;
+
+  // Varianza = media de cuadrados - cuadrado de la media.
+  int64_t meanSqL = sumSqL / frameCount;
+  int64_t meanSqR = sumSqR / frameCount;
+
+  int64_t varianceL = meanSqL - meanL * meanL;
+  int64_t varianceR = meanSqR - meanR * meanR;
+
+  if (varianceL < 0) {
+    varianceL = 0;
+  }
+
+  if (varianceR < 0) {
+    varianceR = 0;
+  }
+
+  float rmsL = sqrtf((float)varianceL);
+  float rmsR = sqrtf((float)varianceR);
+
+  if (rmsL > AUDIO_MAX_DB_SAMPLE) {
+    rmsL = AUDIO_MAX_DB_SAMPLE;
+  }
+
+  if (rmsR > AUDIO_MAX_DB_SAMPLE) {
+    rmsR = AUDIO_MAX_DB_SAMPLE;
+  }
+
+  sampleL = (int32_t)rmsL;
+  sampleR = (int32_t)rmsR;
+}
+
+// Convertir una muestra de audio a nivel "dB" 0..100
+
+int16_t audioSampleToDbLevel(int32_t sample) {
+  if (sample <= AUDIO_MIN_DB_SAMPLE) {
+    return 0;
+  }
+
+  float amplitude = (float)sample;
+
+  if (amplitude > (float)AUDIO_MAX_DB_SAMPLE) {
+    amplitude = (float)AUDIO_MAX_DB_SAMPLE;
+  }
+
+  // Nivel relativo respecto a la amplitud máxima.
+  float ratio = amplitude / (float)AUDIO_MAX_DB_SAMPLE;
+
+  if (ratio <= 0.0f) {
+    return 0;
+  }
+
+  if (ratio > 1.0f) {
+    ratio = 1.0f;
+  }
+
+  // Escala logarítmica:
+  // 0 dB relativo  -> amplitud máxima
+  // -60 dB         -> nivel mínimo visible
+  float db = 20.0f * log10f(ratio);
+
+  const float MIN_DB = -60.0f;
+  const float MAX_DB = 0.0f;
+
+  if (db <= MIN_DB) {
+    return 0;
+  }
+
+  if (db >= MAX_DB) {
+    return 100;
+  }
+
+  float level = ((db - MIN_DB) / (MAX_DB - MIN_DB)) * 100.0f;
+
+  int16_t result = (int16_t)roundf(level);
+
+  if (result < 0) {
+    result = 0;
+  }
+
+  if (result > 100) {
+    result = 100;
+  }
+
+  return result;
+}
+
+// Actualizar niveles de audio L/R (llamar periódicamente)
+
+void updateAudioLevels() {
+  // Leer muestras físicas de los dos micrófonos.
+  readAudioSamples(audioLastSampleL, audioLastSampleR);
+
+  // Convertir cada canal a nivel visual 0..100.
+  int16_t rawLevelL =
+    audioSampleToDbLevel(audioLastSampleL);
+
+  int16_t rawLevelR =
+    audioSampleToDbLevel(audioLastSampleR);
+
+  // Seleccionar la señal que alimentará el VU Meter.
+  //
+  // L:
+  //   barra L = canal izquierdo
+  //   barra R = 0
+  //
+  // R:
+  //   barra L = 0
+  //   barra R = canal derecho
+  //
+  // L+R:
+  //   ambas barras = media de L y R
+  //
+  // Estéreo:
+  //   cada barra conserva su canal independiente.
+  int16_t selectedLevelL = 0;
+  int16_t selectedLevelR = 0;
+
+  switch (vuRadialChannelMode) {
+    case 0: // L
+      selectedLevelL = rawLevelL;
+      selectedLevelR = 0;
+      break;
+
+    case 1: // R
+      selectedLevelL = 0;
+      selectedLevelR = rawLevelR;
+      break;
+
+    case 2: { // L+R: media de ambos canales
+      int16_t mixedLevel =
+        (rawLevelL + rawLevelR) / 2;
+
+      selectedLevelL = mixedLevel;
+      selectedLevelR = mixedLevel;
+      break;
+    }
+
+    case 3: // Estéreo
+    default:
+      selectedLevelL = rawLevelL;
+      selectedLevelR = rawLevelR;
+      break;
+  }
+
+  // Ganancia de Sensibilidad.
+  //
+  // 0  -> silencio.
+  // 50 -> ganancia unitaria.
+  // 100 -> ganancia máxima.
+  //
+  // Por encima de 50 se utiliza una ganancia máxima de 4x.
+  // Este valor podrá ajustarse posteriormente tras probar
+  // físicamente los micrófonos.
+  float sensitivityGain = 0.0f;
+
+  if (vuRadialSensitivity <= 50) {
+    sensitivityGain =
+      vuRadialSensitivity / 50.0f;
+  } else {
+    const float MAX_SENSITIVITY_GAIN = 4.0f;
+
+    float upperPosition =
+      (vuRadialSensitivity - 50) / 50.0f;
+
+    sensitivityGain =
+      1.0f +
+      upperPosition *
+      (MAX_SENSITIVITY_GAIN - 1.0f);
+  }
+
+  float amplifiedLevelL =
+    selectedLevelL * sensitivityGain;
+
+  float amplifiedLevelR =
+    selectedLevelR * sensitivityGain;
+
+  // Indicador de saturación por ganancia.
+  //
+  // Solo se activa si la Sensibilidad ha llevado alguna
+  // señal mostrada por encima de 100.
+  audioSensitivitySaturated =
+    (amplifiedLevelL > 100.0f) ||
+    (amplifiedLevelR > 100.0f);
+
+  // Limitar al máximo visual del VU Meter.
+  if (amplifiedLevelL > 100.0f) {
+    amplifiedLevelL = 100.0f;
+  }
+
+  if (amplifiedLevelR > 100.0f) {
+    amplifiedLevelR = 100.0f;
+  }
+
+  if (amplifiedLevelL < 0.0f) {
+    amplifiedLevelL = 0.0f;
+  }
+
+  if (amplifiedLevelR < 0.0f) {
+    amplifiedLevelR = 0.0f;
+  }
+
+  int16_t levelL =
+    (int16_t)roundf(amplifiedLevelL);
+
+  int16_t levelR =
+    (int16_t)roundf(amplifiedLevelR);
+
+  // Umbral mínimo de respuesta.
+  //
+  // Se aplica después de la ganancia para que Sensibilidad
+  // pueda hacer que una señal débil supere el umbral.
+  if (levelL < vuRadialThreshold) {
+    levelL = 0;
+  }
+
+  if (levelR < vuRadialThreshold) {
+    levelR = 0;
+  }
+
+  // Suavizado de las barras actuales.
+  //
+  // alpha es independiente de Velocidad:
+  // alpha bajo  -> respuesta más rápida.
+  // alpha alto  -> respuesta más suave.
+  const float alpha = 0.25f;
+
+  audioLevelDbL = (int16_t)roundf(
+    audioLevelDbLPrev * alpha +
+    levelL * (1.0f - alpha)
+  );
+
+  audioLevelDbR = (int16_t)roundf(
+    audioLevelDbRPrev * alpha +
+    levelR * (1.0f - alpha)
+  );
+
+  // Limitar los niveles suavizados.
+  if (audioLevelDbL < 0) {
+    audioLevelDbL = 0;
+  }
+
+  if (audioLevelDbL > 100) {
+    audioLevelDbL = 100;
+  }
+
+  if (audioLevelDbR < 0) {
+    audioLevelDbR = 0;
+  }
+
+  if (audioLevelDbR > 100) {
+    audioLevelDbR = 100;
+  }
+
+  // El pico sube inmediatamente cuando la barra lo supera.
+  if (audioLevelDbL > audioPeakDbL) {
+    audioPeakDbL = audioLevelDbL;
+  }
+
+  if (audioLevelDbR > audioPeakDbR) {
+    audioPeakDbR = audioLevelDbR;
+  }
+
+  // Velocidad de caída del pico azul.
+  //
+  // 0   -> caída lenta: 200 ms entre pasos.
+  // 100 -> caída rápida: 10 ms entre pasos.
+  unsigned long now = millis();
+
+  unsigned long peakFallInterval =
+    200UL -
+    ((unsigned long)vuRadialSpeed * 190UL / 100UL);
+
+
+  if (peakFallInterval < 10UL) {
+    peakFallInterval = 10UL;
+  }
+
+  if (now - audioPeakLastUpdateMillis >= peakFallInterval) {
+    audioPeakLastUpdateMillis = now;
+
+    if (audioPeakDbL > audioLevelDbL) {
+      audioPeakDbL -= AUDIO_PEAK_FALL_STEP;
+
+      if (audioPeakDbL < audioLevelDbL) {
+        audioPeakDbL = audioLevelDbL;
+      }
+    }
+
+    if (audioPeakDbR > audioLevelDbR) {
+      audioPeakDbR -= AUDIO_PEAK_FALL_STEP;
+
+      if (audioPeakDbR < audioLevelDbR) {
+        audioPeakDbR = audioLevelDbR;
+      }
+    }
+  }
+
+  // Si un canal está oculto por la selección L/R,
+  // aseguramos que su pico también quede apagado.
+  if (vuRadialChannelMode == 0) {
+    audioLevelDbR = 0;
+    audioPeakDbR = 0;
+    audioLevelDbRPrev = 0;
+  }
+
+  if (vuRadialChannelMode == 1) {
+    audioLevelDbL = 0;
+    audioPeakDbL = 0;
+    audioLevelDbLPrev = 0;
+  }
+
+  // Guardar los valores actuales como previos.
+  audioLevelDbLPrev = audioLevelDbL;
+  audioLevelDbRPrev = audioLevelDbR;
+
+  // Actualizar el tiempo de la última lectura.
+  audioLastReadMillis = now;
+}
 
 // ----------------- Config WiFi / NTP -----------------
 
@@ -471,6 +955,9 @@ Screen currentScreen = SCREEN_SPLASH;
 const unsigned long SPLASH_DURATION   = 2500;
 unsigned long       splashStartMillis = 0;
 
+void drawSettingsVuRadialAudioScreen();
+void drawVuRadialAudioMeter();
+
 const char* MONTH_NAMES_ES[12] = {
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
@@ -481,6 +968,12 @@ const char* MONTH_NAMES_ES[12] = {
 int  currentControl = 0;
 bool editingBar     = false;
 int  lastEncA       = 0;
+
+// Estado independiente del encoder para VU RADIAL - A.
+// No se utiliza en ninguna otra pantalla.
+uint8_t vuRadialEncoderState = 0;
+int8_t  vuRadialEncoderAccum  = 0;
+bool    vuRadialEncoderReady  = false;
 
 int readEncoderStep() {
   int encA    = digitalRead(ENCODER_A);
@@ -493,6 +986,143 @@ int readEncoderStep() {
   }
   lastEncA = encA;
   return stepDir;
+}
+
+// Inicializar el decoder específico de VU RADIAL - A.
+// Se sincroniza con la posición física actual del encoder
+// para no generar un paso falso al entrar en la pantalla.
+void resetVuRadialEncoder() {
+  vuRadialEncoderState =
+    ((digitalRead(ENCODER_A) ? 1 : 0) << 1) |
+     (digitalRead(ENCODER_B) ? 1 : 0);
+
+  vuRadialEncoderAccum = 0;
+  vuRadialEncoderReady = true;
+}
+
+// Decoder de cuadratura utilizado exclusivamente en
+// SCREEN_SETTINGS_VURADIAL_A.
+//
+// Devuelve:
+//   +1 -> giro positivo.
+//   -1 -> giro negativo.
+//    0 -> todavía no se ha completado un paso.
+int readVuRadialEncoderStep(int transitionsPerStep) {
+  static const int8_t transitionTable[16] = {
+     0, -1,  1,  0,
+     1,  0,  0, -1,
+    -1,  0,  0,  1,
+     0,  1, -1,  0
+  };
+
+  if (!vuRadialEncoderReady) {
+    resetVuRadialEncoder();
+    return 0;
+  }
+
+  if (transitionsPerStep < 1) {
+    transitionsPerStep = 1;
+  }
+
+  uint8_t currentState =
+    ((digitalRead(ENCODER_A) ? 1 : 0) << 1) |
+     (digitalRead(ENCODER_B) ? 1 : 0);
+
+  if (currentState == vuRadialEncoderState) {
+    return 0;
+  }
+
+  uint8_t tableIndex =
+    (vuRadialEncoderState << 2) | currentState;
+
+  int8_t transition =
+    transitionTable[tableIndex];
+
+  vuRadialEncoderState = currentState;
+
+  // Ignorar transiciones inválidas o rebotes.
+  if (transition == 0) {
+    return 0;
+  }
+
+  vuRadialEncoderAccum += transition;
+
+  if (vuRadialEncoderAccum >= transitionsPerStep) {
+    vuRadialEncoderAccum -= transitionsPerStep;
+    return +1;
+  }
+
+  if (vuRadialEncoderAccum <= -transitionsPerStep) {
+    vuRadialEncoderAccum += transitionsPerStep;
+    return -1;
+  }
+
+  return 0;
+}
+
+// Decoder específico del selector Canal.
+//
+// Se mantiene separado del decoder de los sliders numéricos.
+// El paso solo se acepta cuando el encoder vuelve al estado
+// estable 3 (A=1, B=1), evitando pasos dobles por rebotes
+// o por transiciones intermedias.
+int readVuRadialChannelStep() {
+  static const int8_t transitionTable[16] = {
+     0, -1,  1,  0,
+     1,  0,  0, -1,
+    -1,  0,  0,  1,
+     0,  1, -1,  0
+  };
+
+  if (!vuRadialEncoderReady) {
+    resetVuRadialEncoder();
+    return 0;
+  }
+
+  uint8_t currentState =
+    ((digitalRead(ENCODER_A) ? 1 : 0) << 1) |
+     (digitalRead(ENCODER_B) ? 1 : 0);
+
+  if (currentState == vuRadialEncoderState) {
+    return 0;
+  }
+
+  uint8_t tableIndex =
+    (vuRadialEncoderState << 2) | currentState;
+
+  int8_t transition =
+    transitionTable[tableIndex];
+
+  vuRadialEncoderState = currentState;
+
+  // Ignorar transiciones inválidas.
+  if (transition == 0) {
+    return 0;
+  }
+
+  vuRadialEncoderAccum += transition;
+
+  // No generar un paso en estados intermedios.
+  if (currentState != 3) {
+    return 0;
+  }
+
+  // Al volver al estado estable 3, aceptar cualquier acumulación
+  // neta. La comprobación de currentState == 3 evita que una
+  // posición mecánica genere varios pasos.
+  if (vuRadialEncoderAccum > 0) {
+    vuRadialEncoderAccum = 0;
+    return +1;
+  }
+
+  if (vuRadialEncoderAccum < 0) {
+    vuRadialEncoderAccum = 0;
+    return -1;
+  }
+
+  vuRadialEncoderAccum = 0;
+
+  return 0;
 }
 
 // ----------------- NVS (config general) -----------------
@@ -567,6 +1197,18 @@ void loadConfig() {
   vuRadialColorStart = prefs.getUShort("vrcC0", 0x001F); // azul por defecto
   vuRadialColorEnd = prefs.getUShort("vrcC1", 0x07FF);   // cian por defecto
 
+  // Config VU RADIAL - A (audio)
+  vuRadialSensitivity = prefs.getUChar("vraSens", 50);     // 0..100
+  vuRadialThreshold   = prefs.getUChar("vraThr", 20);      // 0..100
+  vuRadialSpeed       = prefs.getUChar("vraSpd", 50);      // 0..100
+  vuRadialChannelMode = prefs.getUChar("vraCh", 3);        // 0=L,1=R,2=L+R,3=Estéreo
+
+  // Límites por seguridad
+  if (vuRadialSensitivity > 100) vuRadialSensitivity = 100;
+  if (vuRadialThreshold   > 100) vuRadialThreshold   = 100;
+  if (vuRadialSpeed       > 100) vuRadialSpeed       = 100;
+  if (vuRadialChannelMode > 3)   vuRadialChannelMode = 3;
+
   prefs.end();
 
   if (tftBacklightLevel > 100) tftBacklightLevel = 100;
@@ -633,6 +1275,12 @@ void saveConfigBasic() {
   // Config VU RADIAL - C
   prefs.putUShort("vrcC0", vuRadialColorStart);
   prefs.putUShort("vrcC1", vuRadialColorEnd);
+
+  // Config VU RADIAL - A (audio)
+  prefs.putUChar("vraSens", vuRadialSensitivity);
+  prefs.putUChar("vraThr",  vuRadialThreshold);
+  prefs.putUChar("vraSpd",  vuRadialSpeed);
+  prefs.putUChar("vraCh",   vuRadialChannelMode);
 
   prefs.end();
 }
@@ -4452,6 +5100,687 @@ void drawSettingsVuRadialScreen() {
   tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
 }
 
+// ---------- Pantalla de configuración VU RADIAL - A ----------
+
+// Geometría del VU meter estéreo horizontal.
+//
+// Cada línea es horizontal y está formada por barras verticales
+// consecutivas que avanzan de izquierda a derecha.
+const int VURADIAL_AUDIO_LABEL_X = 4;
+
+// Primera barra, dejando separación después de las etiquetas L/R.
+const int VURADIAL_AUDIO_METER_X = 24;
+
+// Anchura aproximada reservada para las barras.
+const int VURADIAL_AUDIO_METER_W = 180;
+
+// Cada barra mide 3 píxeles de ancho.
+// Entre una barra y la siguiente hay 2 píxeles.
+const int VURADIAL_AUDIO_BAR_W   = 3;
+const int VURADIAL_AUDIO_BAR_GAP = 2;
+
+// Altura de cada barra, aproximadamente igual
+// a la altura de la fuente de texto tamaño 2.
+const int VURADIAL_AUDIO_BAR_H = 16;
+
+
+// Primera línea del VU meter: canal L.
+const int VURADIAL_AUDIO_BAR_Y_L = 42;
+
+// Segunda línea del VU meter: canal R.
+// Se deja una separación vertical inicial de 4 píxeles.
+const int VURADIAL_AUDIO_BAR_Y_R =
+  VURADIAL_AUDIO_BAR_Y_L +
+  VURADIAL_AUDIO_BAR_H +
+  4;
+
+
+// Texto dB centrado verticalmente entre las dos líneas.
+const int VURADIAL_AUDIO_DB_X = 216;
+const int VURADIAL_AUDIO_DB_Y =
+  (VURADIAL_AUDIO_BAR_Y_L +
+   VURADIAL_AUDIO_BAR_Y_R +
+   VURADIAL_AUDIO_BAR_H) / 2;
+
+
+// Número de barras que caben en la anchura disponible.
+const int VURADIAL_AUDIO_BAR_COUNT =
+  (VURADIAL_AUDIO_METER_W + VURADIAL_AUDIO_BAR_GAP) /
+  (VURADIAL_AUDIO_BAR_W + VURADIAL_AUDIO_BAR_GAP);
+
+
+// Obtener el color de una barra según su posición.
+//
+// Izquierda: blanco.
+// Centro: amarillo.
+// Derecha: rojo.
+uint16_t vuRadialAudioBarColor(int barIndex) {
+  if (barIndex < 0) {
+    barIndex = 0;
+  }
+
+  if (barIndex >= VURADIAL_AUDIO_BAR_COUNT) {
+    barIndex = VURADIAL_AUDIO_BAR_COUNT - 1;
+  }
+
+  float position = 0.0f;
+
+  if (VURADIAL_AUDIO_BAR_COUNT > 1) {
+    position = (float)barIndex /
+               (float)(VURADIAL_AUDIO_BAR_COUNT - 1);
+  }
+
+  uint8_t r = 255;
+  uint8_t g = 255;
+  uint8_t b = 0;
+
+  if (position <= 0.5f) {
+    // Transición de blanco a amarillo.
+    float t = position / 0.5f;
+
+    r = 255;
+    g = 255;
+    b = (uint8_t)roundf(255.0f * (1.0f - t));
+  } else {
+    // Transición de amarillo a rojo.
+    float t = (position - 0.5f) / 0.5f;
+
+    r = 255;
+    g = (uint8_t)roundf(255.0f * (1.0f - t));
+    b = 0;
+  }
+
+  return tft.color565(r, g, b);
+}
+
+// Dibujar únicamente la zona dinámica de una línea horizontal
+// del VU meter. Las etiquetas L/R se dibujan una sola vez
+// al crear la pantalla.
+void drawVuRadialAudioBar(
+  int y,
+  int level,
+  int peakLevel
+) {
+  if (level < 0) {
+    level = 0;
+  }
+
+  if (level > 100) {
+    level = 100;
+  }
+
+  if (peakLevel < 0) {
+    peakLevel = 0;
+  }
+
+  if (peakLevel > 100) {
+    peakLevel = 100;
+  }
+
+
+  // Anchura estrictamente ocupada por las barras y sus separaciones.
+  int meterWidth =
+    VURADIAL_AUDIO_BAR_COUNT * VURADIAL_AUDIO_BAR_W;
+
+  if (VURADIAL_AUDIO_BAR_COUNT > 1) {
+    meterWidth +=
+      (VURADIAL_AUDIO_BAR_COUNT - 1) *
+      VURADIAL_AUDIO_BAR_GAP;
+  }
+
+
+  // Número de barras encendidas según el nivel actual.
+  int activeBars =
+    (VURADIAL_AUDIO_BAR_COUNT * level) / 100;
+
+  // Posición de la barra de pico.
+  int peakBar = -1;
+
+  if (peakLevel > 0) {
+    peakBar =
+      (VURADIAL_AUDIO_BAR_COUNT * peakLevel) / 100;
+
+    if (peakBar >= VURADIAL_AUDIO_BAR_COUNT) {
+      peakBar = VURADIAL_AUDIO_BAR_COUNT - 1;
+    }
+  }
+
+
+  // Redibujar exclusivamente el rectángulo ocupado
+  // por las barras de esta línea.
+  for (int i = 0; i < VURADIAL_AUDIO_BAR_COUNT; i++) {
+    int x =
+      VURADIAL_AUDIO_METER_X +
+      i * (VURADIAL_AUDIO_BAR_W +
+           VURADIAL_AUDIO_BAR_GAP);
+
+    uint16_t color = TFT_BLACK;
+
+    if (i < activeBars) {
+      // Nivel normal con degradado blanco-amarillo-rojo.
+      color = vuRadialAudioBarColor(i);
+    } else if (i == peakBar) {
+      // Pico azul con caída lenta.
+      color = TFT_BLUE;
+    }
+
+    tft.fillRect(
+      x,
+      y,
+      VURADIAL_AUDIO_BAR_W,
+      VURADIAL_AUDIO_BAR_H,
+      color
+    );
+  }
+}
+
+// Actualizar exclusivamente las barras dinámicas del VU meter.
+void drawVuRadialAudioMeter() {
+  drawVuRadialAudioBar(
+    VURADIAL_AUDIO_BAR_Y_L,
+    audioLevelDbL,
+    audioPeakDbL
+  );
+
+  drawVuRadialAudioBar(
+    VURADIAL_AUDIO_BAR_Y_R,
+    audioLevelDbR,
+    audioPeakDbR
+  );
+
+  // Sustituye la antigua etiqueta "dB" por un indicador
+  // de saturación de sensibilidad.
+  //
+  // Se limpia primero para que el círculo desaparezca
+  // inmediatamente cuando deje de existir saturación.
+  tft.fillCircle(
+    VURADIAL_AUDIO_DB_X,
+    VURADIAL_AUDIO_DB_Y,
+    8,
+    TFT_BLACK
+  );
+
+  if (audioSensitivitySaturated) {
+    // Sin borde blanco, tal como se ha solicitado.
+    tft.fillCircle(
+      VURADIAL_AUDIO_DB_X,
+      VURADIAL_AUDIO_DB_Y,
+      7,
+      TFT_RED
+    );
+  }
+}
+
+// ---------- Sliders de configuración VU RADIAL - A ----------
+
+// Geometría común de los sliders horizontales.
+const int VURADIAL_AUDIO_SLIDER_X = 34;
+const int VURADIAL_AUDIO_SLIDER_W = 172;
+const int VURADIAL_AUDIO_SLIDER_H = 6;
+
+// Posiciones verticales de las etiquetas y de las pistas.
+const int VURADIAL_AUDIO_SLIDER_LABEL_Y_1 = 84;
+const int VURADIAL_AUDIO_SLIDER_TRACK_Y_1 = 98;
+
+const int VURADIAL_AUDIO_SLIDER_LABEL_Y_2 = 112;
+const int VURADIAL_AUDIO_SLIDER_TRACK_Y_2 = 126;
+
+const int VURADIAL_AUDIO_SLIDER_LABEL_Y_3 = 140;
+const int VURADIAL_AUDIO_SLIDER_TRACK_Y_3 = 154;
+
+const int VURADIAL_AUDIO_SLIDER_LABEL_Y_4 = 172;
+const int VURADIAL_AUDIO_SLIDER_TRACK_Y_4 = 182;
+
+// Posición del botón Iniciar.
+const int VURADIAL_AUDIO_BUTTON_X = 70;
+const int VURADIAL_AUDIO_BUTTON_Y = 210;
+const int VURADIAL_AUDIO_BUTTON_W = 100;
+const int VURADIAL_AUDIO_BUTTON_H = 24;
+
+// Dibujar un slider horizontal de valores 0..100.
+void drawVuRadialAudioSlider(
+  const char* label,
+  uint8_t value,
+  int labelY,
+  int trackY,
+  bool focused
+) {
+  if (value > 100) {
+    value = 100;
+  }
+
+  // Etiqueta encima de la pista.
+  tft.setTextSize(1);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.drawString(
+    label,
+    VURADIAL_AUDIO_SLIDER_X,
+    labelY
+  );
+
+  // Pista completa.
+  uint16_t sliderDark = tft.color565(40, 40, 40);
+
+  tft.fillRect(
+    VURADIAL_AUDIO_SLIDER_X,
+    trackY,
+    VURADIAL_AUDIO_SLIDER_W,
+    VURADIAL_AUDIO_SLIDER_H,
+    sliderDark
+  );
+
+  // Parte activa del slider.
+  int activeW =
+    (VURADIAL_AUDIO_SLIDER_W * value) / 100;
+
+  if (activeW > 0) {
+    tft.fillRect(
+      VURADIAL_AUDIO_SLIDER_X,
+      trackY,
+      activeW,
+      VURADIAL_AUDIO_SLIDER_H,
+      TFT_WHITE
+    );
+  }
+
+  // Contorno de la pista.
+  tft.drawRect(
+    VURADIAL_AUDIO_SLIDER_X - 1,
+    trackY - 1,
+    VURADIAL_AUDIO_SLIDER_W + 2,
+    VURADIAL_AUDIO_SLIDER_H + 2,
+    TFT_WHITE
+  );
+
+  // Knob.
+  int knobX =
+    VURADIAL_AUDIO_SLIDER_X +
+    (VURADIAL_AUDIO_SLIDER_W - 1) * value / 100;
+
+  int knobY = trackY + VURADIAL_AUDIO_SLIDER_H / 2;
+
+  uint16_t knobFill = focused ? TFT_WHITE : sliderDark;
+
+  tft.fillCircle(
+    knobX,
+    knobY,
+    focused ? 6 : 5,
+    knobFill
+  );
+
+  tft.drawCircle(
+    knobX,
+    knobY,
+    focused ? 8 : 6,
+    TFT_WHITE
+  );
+
+  // Valor numérico a la derecha.
+  char valueText[8];
+  snprintf(
+    valueText,
+    sizeof(valueText),
+    "%3u",
+    value
+  );
+
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  // Centro vertical de la pista del slider.
+  int valueY = trackY + VURADIAL_AUDIO_SLIDER_H / 2;
+
+  tft.fillRect(
+    216,
+    valueY - 8,
+    24,
+    16,
+    TFT_BLACK
+  );
+
+  // El valor se dibuja centrado verticalmente con la pista.
+  tft.drawString(
+    valueText,
+    236,
+    valueY
+  );
+}
+
+// Dibujar el slider de canal con cuatro posiciones.
+void drawVuRadialAudioChannelSlider(
+  int channelMode,
+  int labelY,
+  int trackY,
+  bool focused
+) {
+  if (channelMode < 0) {
+    channelMode = 0;
+  }
+
+  if (channelMode > 3) {
+    channelMode = 3;
+  }
+
+  const char* channelNames[4] = {
+    "L",
+    "R",
+    "L+R",
+    "ESTEREO"
+  };
+
+  // Etiquetas de las cuatro posiciones del canal.
+  // Se dibujan encima de sus respectivas marcas.
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  int firstX = VURADIAL_AUDIO_SLIDER_X;
+  int lastX =
+    VURADIAL_AUDIO_SLIDER_X +
+    VURADIAL_AUDIO_SLIDER_W - 1;
+
+  tft.setTextDatum(MC_DATUM);
+
+  for (int i = 0; i < 4; i++) {
+    int x =
+      firstX +
+      ((lastX - firstX) * i) / 3;
+
+    tft.drawString(
+      channelNames[i],
+      x,
+      labelY
+    );
+  }
+
+  int centerY =
+    trackY + VURADIAL_AUDIO_SLIDER_H / 2;
+
+  tft.drawLine(
+    firstX,
+    centerY,
+    lastX,
+    centerY,
+    tft.color565(40, 40, 40)
+  );
+
+  // Cuatro marcas equidistantes.
+  for (int i = 0; i < 4; i++) {
+    int x =
+      firstX +
+      ((lastX - firstX) * i) / 3;
+
+    tft.fillRect(
+      x - 1,
+      centerY - 4,
+      3,
+      9,
+      TFT_WHITE
+    );
+  }
+
+  // Knob de canal.
+  int knobX =
+    firstX +
+    ((lastX - firstX) * channelMode) / 3;
+
+  uint16_t knobFill =
+    focused ? TFT_WHITE : TFT_DARKGREY;
+
+  tft.fillCircle(
+    knobX,
+    centerY,
+    focused ? 6 : 5,
+    knobFill
+  );
+
+  tft.drawCircle(
+    knobX,
+    centerY,
+    focused ? 8 : 6,
+    TFT_WHITE
+  );
+}
+
+// Borrar únicamente la zona dinámica de un slider.
+// La zona incluye la pista y el knob completo, pero no alcanza
+// las etiquetas superiores ni los sliders contiguos.
+void clearVuRadialAudioSliderDynamic(int trackY) {
+  // El knob enfocado tiene un radio máximo de 8 píxeles.
+  // El centro del knob está en trackY + 3.
+  // Estos límites cubren exactamente el círculo completo,
+  // sin alcanzar la etiqueta del slider siguiente.
+  const int dynamicTop =
+    trackY - 5;
+
+  const int dynamicBottom =
+    trackY + VURADIAL_AUDIO_SLIDER_H + 6;
+
+  const int dynamicHeight =
+    dynamicBottom - dynamicTop;
+
+  tft.fillRect(
+    VURADIAL_AUDIO_SLIDER_X - 10,
+    dynamicTop,
+    VURADIAL_AUDIO_SLIDER_W + 20,
+    dynamicHeight,
+    TFT_BLACK
+  );
+}
+
+// Borrar únicamente la zona del botón Iniciar.
+void clearVuRadialAudioButton() {
+  tft.fillRect(
+    VURADIAL_AUDIO_BUTTON_X - 10,
+    VURADIAL_AUDIO_BUTTON_Y - 10,
+    VURADIAL_AUDIO_BUTTON_W + 20,
+    VURADIAL_AUDIO_BUTTON_H + 20,
+    TFT_BLACK
+  );
+}
+
+// Dibujar únicamente el botón Iniciar.
+void drawVuRadialAudioButton() {
+  bool focusedButton =
+    (vuRadialAFocus == VURADIAL_A_FOCUS_BUTTON);
+
+  uint16_t buttonFill =
+    focusedButton ? TFT_WHITE : TFT_DARKGREY;
+
+  uint16_t buttonText =
+    focusedButton ? TFT_BLACK : TFT_WHITE;
+
+
+  tft.fillRoundRect(
+    VURADIAL_AUDIO_BUTTON_X,
+    VURADIAL_AUDIO_BUTTON_Y,
+    VURADIAL_AUDIO_BUTTON_W,
+    VURADIAL_AUDIO_BUTTON_H,
+    4,
+    buttonFill
+  );
+
+  tft.drawRoundRect(
+    VURADIAL_AUDIO_BUTTON_X,
+    VURADIAL_AUDIO_BUTTON_Y,
+    VURADIAL_AUDIO_BUTTON_W,
+    VURADIAL_AUDIO_BUTTON_H,
+    4,
+    TFT_WHITE
+  );
+
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(buttonText, buttonFill);
+
+  tft.drawString(
+    "Iniciar",
+    VURADIAL_AUDIO_BUTTON_X +
+      VURADIAL_AUDIO_BUTTON_W / 2,
+    VURADIAL_AUDIO_BUTTON_Y +
+      VURADIAL_AUDIO_BUTTON_H / 2
+  );
+}
+
+// Dibujar los cuatro sliders y el botón.
+void drawVuRadialAudioControls() {
+  // Borrar solo la zona inferior reservada a los controles.
+  // Comienza después del VU meter y llega hasta el final de la pantalla.
+  tft.fillRect(
+    0,
+    80,
+    240,
+    160,
+    TFT_BLACK
+  );
+
+  drawVuRadialAudioSlider(
+    "SENSIBILIDAD",
+    vuRadialSensitivity,
+    VURADIAL_AUDIO_SLIDER_LABEL_Y_1,
+    VURADIAL_AUDIO_SLIDER_TRACK_Y_1,
+    vuRadialAFocus == VURADIAL_A_FOCUS_SENSIBILITY
+  );
+
+  drawVuRadialAudioSlider(
+    "UMBRAL",
+    vuRadialThreshold,
+    VURADIAL_AUDIO_SLIDER_LABEL_Y_2,
+    VURADIAL_AUDIO_SLIDER_TRACK_Y_2,
+    vuRadialAFocus == VURADIAL_A_FOCUS_THRESHOLD
+  );
+
+  drawVuRadialAudioSlider(
+    "VELOCIDAD",
+    vuRadialSpeed,
+    VURADIAL_AUDIO_SLIDER_LABEL_Y_3,
+    VURADIAL_AUDIO_SLIDER_TRACK_Y_3,
+    vuRadialAFocus == VURADIAL_A_FOCUS_SPEED
+  );
+
+  drawVuRadialAudioChannelSlider(
+    vuRadialChannelMode,
+    VURADIAL_AUDIO_SLIDER_LABEL_Y_4,
+    VURADIAL_AUDIO_SLIDER_TRACK_Y_4,
+    vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL
+  );
+
+  drawVuRadialAudioButton();
+
+}
+
+// Redibujar únicamente el control que ha cambiado.
+void redrawVuRadialAudioFocusedControl() {
+  switch (vuRadialAFocus) {
+    case VURADIAL_A_FOCUS_SENSIBILITY:
+      clearVuRadialAudioSliderDynamic(
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_1
+      );
+
+      drawVuRadialAudioSlider(
+        "SENSIBILIDAD",
+        vuRadialSensitivity,
+        VURADIAL_AUDIO_SLIDER_LABEL_Y_1,
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_1,
+        true
+      );
+      break;
+
+
+    case VURADIAL_A_FOCUS_THRESHOLD:
+      clearVuRadialAudioSliderDynamic(
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_2
+      );
+
+      drawVuRadialAudioSlider(
+        "UMBRAL",
+        vuRadialThreshold,
+        VURADIAL_AUDIO_SLIDER_LABEL_Y_2,
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_2,
+        true
+      );
+      break;
+
+
+    case VURADIAL_A_FOCUS_SPEED:
+      clearVuRadialAudioSliderDynamic(
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_3
+      );
+
+      drawVuRadialAudioSlider(
+        "VELOCIDAD",
+        vuRadialSpeed,
+        VURADIAL_AUDIO_SLIDER_LABEL_Y_3,
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_3,
+        true
+      );
+      break;
+
+
+    case VURADIAL_A_FOCUS_CHANNEL:
+      clearVuRadialAudioSliderDynamic(
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_4
+      );
+
+      drawVuRadialAudioChannelSlider(
+        vuRadialChannelMode,
+        VURADIAL_AUDIO_SLIDER_LABEL_Y_4,
+        VURADIAL_AUDIO_SLIDER_TRACK_Y_4,
+        true
+      );
+      break;
+
+
+    case VURADIAL_A_FOCUS_BUTTON:
+      clearVuRadialAudioButton();
+      drawVuRadialAudioButton();
+      break;
+  }
+}
+
+// Dibujar la pantalla completa VU RADIAL - A.
+void drawSettingsVuRadialAudioScreen() {
+  tft.fillScreen(TFT_BLACK);
+
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera.
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("VU RADIAL - A", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // Etiquetas estáticas del VU meter.
+  // Solo se dibujan al construir la pantalla.
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString(
+    "L",
+    VURADIAL_AUDIO_LABEL_X,
+    VURADIAL_AUDIO_BAR_Y_L
+  );
+
+  tft.drawString(
+    "R",
+    VURADIAL_AUDIO_LABEL_X,
+    VURADIAL_AUDIO_BAR_Y_R
+  );
+
+  // VU meter inicial.
+  // Las actualizaciones posteriores solo afectan a las barras.
+  drawVuRadialAudioMeter();
+
+  // Sliders y botón.
+  drawVuRadialAudioControls();
+}
+
 // ---------- Menús WiFi ----------
 
 int  wifiMenuIndex    = 0;
@@ -4769,8 +6098,12 @@ void drawSettingsAboutScreen() {
 
 void setup() {
   Serial.begin(115200);
+
   delay(1000);
-  Serial.println("LAMP_Fun V2.4.2");
+
+  initI2SAudio();
+
+  Serial.println("LAMP_Fun V.2.7.0");
 
   initBacklight();
 
@@ -4828,7 +6161,13 @@ void setup() {
 // ----------------- loop() -----------------
 
 void loop() {
-  int stepDir = readEncoderStep();
+  // En VU RADIAL - A se utiliza exclusivamente su decoder específico.
+  // Evitar que el decoder general lea también ENCODER_A/ENCODER_B.
+  int stepDir = 0;
+
+  if (currentScreen != SCREEN_SETTINGS_VURADIAL_A) {
+    stepDir = readEncoderStep();
+  }
 
   static bool lastSw   = true;
   bool        sw       = digitalRead(ENCODER_SW);
@@ -5776,15 +7115,168 @@ void loop() {
           vuRadialFocus = VURADIAL_FOCUS_END;
           drawSettingsVuRadialScreen();
         } else {
-          // En el foco final: guardar y pasar a la pantalla de audio
+          // En el foco final: guardar y pasar a VU RADIAL - A
           saveConfigBasic();
+          initVuRadialAudioPositions();
+          // Sincronizar el decoder específico antes de entrar
+          // en VU RADIAL - A.
+          resetVuRadialEncoder();
           currentScreen = SCREEN_SETTINGS_VURADIAL_A;
-          // drawSettingsVuRadialAudioScreen();  // la definiremos más adelante
+          drawSettingsVuRadialAudioScreen();
         }
       }
 
       if (btn2Falling) {
         saveConfigBasic();
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_VURADIAL_A: {
+      // Pantalla de audio VU RADIAL - A.
+      // El VU meter se actualiza en el bloque general de audio.
+
+      // Giro del encoder: utilizar el decoder específico
+      // de esta pantalla.
+      //
+      // Los tres sliders numéricos necesitan dos transiciones
+      // para producir un paso visible.
+      // El selector Canal necesita cuatro para que cada posición
+      // mecánica corresponda a una sola opción.
+
+      int vuStepDir = 0;
+
+      if (vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL) {
+        // Canal utiliza el decoder por retorno al estado estable.
+        vuStepDir = readVuRadialChannelStep();
+      } else {
+        // Los tres sliders numéricos mantienen el decoder original.
+        vuStepDir = readVuRadialEncoderStep(2);
+      }
+
+      if (vuStepDir != 0) {
+        int dir = (vuStepDir > 0) ? 1 : -1;
+        int valueStep = 2;
+        bool changed = false;
+
+        switch (vuRadialAFocus) {
+          case VURADIAL_A_FOCUS_SENSIBILITY: {
+            int value =
+              (int)vuRadialSensitivity + dir * valueStep;
+
+            if (value < 0) {
+              value = 0;
+            }
+
+            if (value > 100) {
+              value = 100;
+            }
+
+            if (value != vuRadialSensitivity) {
+              vuRadialSensitivity = (uint8_t)value;
+              changed = true;
+            }
+            break;
+          }
+
+          case VURADIAL_A_FOCUS_THRESHOLD: {
+            int value =
+              (int)vuRadialThreshold + dir * valueStep;
+
+            if (value < 0) {
+              value = 0;
+            }
+
+            if (value > 100) {
+              value = 100;
+            }
+
+            if (value != vuRadialThreshold) {
+              vuRadialThreshold = (uint8_t)value;
+              changed = true;
+            }
+            break;
+          }
+
+          case VURADIAL_A_FOCUS_SPEED: {
+            int value =
+              (int)vuRadialSpeed + dir * valueStep;
+
+            if (value < 0) {
+              value = 0;
+            }
+
+            if (value > 100) {
+              value = 100;
+            }
+
+            if (value != vuRadialSpeed) {
+              vuRadialSpeed = (uint8_t)value;
+              changed = true;
+            }
+            break;
+          }
+
+          case VURADIAL_A_FOCUS_CHANNEL: {
+            int value =
+              (int)vuRadialChannelMode + dir;
+
+            if (value < 0) {
+              value = 0;
+            }
+
+            if (value > 3) {
+              value = 3;
+            }
+
+            if (value != vuRadialChannelMode) {
+              vuRadialChannelMode = (uint8_t)value;
+              changed = true;
+            }
+            break;
+          }
+
+          case VURADIAL_A_FOCUS_BUTTON:
+            // El giro no modifica el botón.
+            break;
+        }
+
+        if (changed) {
+          redrawVuRadialAudioFocusedControl();
+        }
+      }
+
+      // Pulsación del encoder: pasar al siguiente foco.
+      if (encButtonFalling) {
+
+        // Guardar al pasar de Canal al botón Iniciar.
+        if (vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL) {
+          saveConfigBasic();
+        }
+
+        vuRadialAFocus =
+          (VuRadialAFocus)(
+            ((int)vuRadialAFocus + 1) % 5
+          );
+
+        // Evitar que una transición incompleta del control
+        // anterior afecte al nuevo control.
+        vuRadialEncoderAccum = 0;
+
+        // Sincronizar el estado lógico del decoder con el estado
+        // eléctrico actual del encoder.
+        vuRadialEncoderState =
+          ((digitalRead(ENCODER_A) ? 1 : 0) << 1) |
+           (digitalRead(ENCODER_B) ? 1 : 0);
+
+        drawVuRadialAudioControls();
+      }
+
+      // Botón 2: volver al menú de efectos.
+      if (btn2Falling) {
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
@@ -6096,6 +7588,16 @@ void loop() {
       break;
   }
 
+  // Actualizar niveles de audio si estamos en la pantalla VU RADIAL - A
+  if (currentScreen == SCREEN_SETTINGS_VURADIAL_A) {
+    // Inicializar audio la primera vez que entramos
+    if (!i2sAudioInitialized) {
+      initI2SAudio();
+    }
+    updateAudioLevels();
+    drawVuRadialAudioMeter();
+  }
+  
   lastSw   = sw;
   lastBtn2 = btn2;
 
