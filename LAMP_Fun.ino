@@ -195,6 +195,18 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
 
     sumSqL += (int64_t)valueL * (int64_t)valueL;
     sumSqR += (int64_t)valueR * (int64_t)valueR;
+
+    // Guardar muestra cruda para FFT (buffer circular)
+    if (fftBufferIndex < FFT_SAMPLES) {
+      fftBufferL[fftBufferIndex] = (float)valueL;
+      fftBufferR[fftBufferIndex] = (float)valueR;
+      fftBufferIndex++;
+      
+      if (fftBufferIndex >= FFT_SAMPLES) {
+        fftBufferReady = true;
+        fftBufferIndex = 0;
+      }
+    }
     
   }
 
@@ -518,6 +530,101 @@ void updateAudioLevels() {
 
   // Actualizar el tiempo de la última lectura.
   audioLastReadMillis = now;
+}
+
+// ============================================================================
+// FFT - Calcular analizador de frecuencias
+// ============================================================================
+
+void calculateFFT() {
+  // Solo calcular si hay buffer lleno y ha pasado el intervalo
+  if (!fftBufferReady || (millis() - lastFFTUpdateMillis) < FFT_UPDATE_INTERVAL) {
+    return;
+  }
+  
+  // Resetear flag
+  fftBufferReady = false;
+  lastFFTUpdateMillis = millis();
+  
+  // Calcular nivel de referencia (RMS de VU)
+  float referenceLevel = max(audioLevelDbL, audioLevelDbR);
+  
+  // Aplicar umbral de silencio
+  if (referenceLevel < vuRadialThreshold) {
+    // Silencio: todas las bandas a 0
+    for (int i = 0; i < FFT_BANDS; i++) {
+      fftBandsL[i] = 0;
+      fftBandsR[i] = 0;
+      fftSmoothL[i] = 0;
+      fftSmoothR[i] = 0;
+    }
+    return;
+  }
+  
+  // Copiar muestras a arrays de FFT
+  for (int i = 0; i < FFT_SAMPLES; i++) {
+    vRealL[i] = fftBufferL[i];
+    vImagL[i] = 0;
+    vRealR[i] = fftBufferR[i];
+    vImagR[i] = 0;
+  }
+  
+  // Aplicar ventana de Hamming
+  fftL.WindowFunction(FFT_WIN_TYP_HAMMING);
+  fftR.WindowFunction(FFT_WIN_TYP_HAMMING);
+  
+  // Calcular FFT
+  fftL.Compute(FFT_FORWARD);
+  fftR.Compute(FFT_FORWARD);
+  
+  // Calcular magnitud de bandas
+  for (int band = 0; band < FFT_BANDS; band++) {
+    // Calcular índice de frecuencia para esta banda
+    int startBin = (band * FFT_SAMPLES) / (FFT_BANDS * 2);
+    int endBin = ((band + 1) * FFT_SAMPLES) / (FFT_BANDS * 2);
+    
+    float sumL = 0;
+    float sumR = 0;
+    
+    // Sumar magnitudes en el rango de bins
+    for (int bin = startBin; bin < endBin; bin++) {
+      sumL += sqrt(sq(vRealL[bin]) + sq(vImagL[bin]));
+      sumR += sqrt(sq(vRealR[bin]) + sq(vImagR[bin]));
+    }
+    
+    // Promediar
+    float avgL = sumL / (endBin - startBin);
+    float avgR = sumR / (endBin - startBin);
+    
+    // Normalizar respecto al nivel de referencia (RMS de VU)
+    float normalizedL = avgL / (referenceLevel + 1e-6);
+    float normalizedR = avgR / (referenceLevel + 1e-6);
+    
+    // Aplicar sensibilidad
+    float scaledL = normalizedL * (vuRadialSensitivity / 100.0);
+    float scaledR = normalizedR * (vuRadialSensitivity / 100.0);
+    
+    // Limitar a 0-255
+    fftBandsL[band] = constrain((int)(scaledL * 255), 0, 255);
+    fftBandsR[band] = constrain((int)(scaledR * 255), 0, 255);
+  }
+  
+  // Aplicar suavizado (attack rápido, decay lento)
+  for (int i = 0; i < FFT_BANDS; i++) {
+    // Attack: subir rápido
+    if (fftBandsL[i] > fftSmoothL[i]) {
+      fftSmoothL[i] = fftSmoothL[i] * 0.7 + fftBandsL[i] * 0.3;
+    } else {
+      // Decay: bajar lento
+      fftSmoothL[i] = fftSmoothL[i] * 0.95 + fftBandsL[i] * 0.05;
+    }
+    
+    if (fftBandsR[i] > fftSmoothR[i]) {
+      fftSmoothR[i] = fftSmoothR[i] * 0.7 + fftBandsR[i] * 0.3;
+    } else {
+      fftSmoothR[i] = fftSmoothR[i] * 0.95 + fftBandsR[i] * 0.05;
+    }
+  }
 }
 
 // ----------------- Config WiFi / NTP -----------------
@@ -932,6 +1039,44 @@ uint8_t vuRadialSensitivity = 50; // 0..100
 uint8_t vuRadialThreshold = 20;   // 0..100
 uint8_t vuRadialSpeed = 50;       // 0..100
 uint8_t vuRadialChannelMode = 3;  // 0=L, 1=R, 2=L+R, 3=Estéreo
+
+// ============================================================================
+// FFT - Analizador de frecuencias (16 bandas, 512 muestras)
+// ============================================================================
+
+#define FFT_SAMPLES 512
+#define FFT_BANDS 16
+#define FFT_SAMPLING_FREQ 16000  // Hz
+
+// Buffers para FFT (interleaved L+R)
+float fftBufferL[FFT_SAMPLES];
+float fftBufferR[FFT_SAMPLES];
+int fftBufferIndex = 0;
+bool fftBufferReady = false;
+
+// Arrays para arduinoFFT
+float vRealL[FFT_SAMPLES];
+float vImagL[FFT_SAMPLES];
+float vRealR[FFT_SAMPLES];
+float vImagR[FFT_SAMPLES];
+
+// Bandas resultantes (0-255)
+uint8_t fftBandsL[FFT_BANDS];
+uint8_t fftBandsR[FFT_BANDS];
+
+// Suavizado de bandas
+float fftSmoothL[FFT_BANDS];
+float fftSmoothR[FFT_BANDS];
+float fftDecayL[FFT_BANDS];
+float fftDecayR[FFT_BANDS];
+
+// Instancias de FFT
+FFT fftL = FFT(vRealL, vImagL, FFT_SAMPLES);
+FFT fftR = FFT(vRealR, vImagR, FFT_SAMPLES);
+
+// Última actualización de FFT
+unsigned long lastFFTUpdateMillis = 0;
+#define FFT_UPDATE_INTERVAL 25  // ms entre actualizaciones de FFT
 
 void initVuRadialAudioPositions() {
   if (vuRadialSensitivity > 100) vuRadialSensitivity = 100;
@@ -6396,6 +6541,18 @@ void drawSettingsVuRadialAudioScreen() {
   drawVuRadialAudioControls();
 }
 
+// Dibujar analizadores de frecuencia (2 filas horizontales, 16 bandas).
+// TODO: Implementar cuando se proporcionen coordenadas exactas.
+void drawFrequencyAnalyzers() {
+  // Placeholder por ahora.
+  // Se implementará cuando se proporcionen:
+  // - Coordenadas X, Y de inicio de cada fila
+  // - Ancho total disponible (px)
+  // - Altura máxima por fila (px)
+  // - Color de las barras
+  // - Espacio entre barras (si quieres)
+}
+
 // Dibujar la pantalla completa VU RADIAL - F.
 void drawVuRadialFScreen() {
   tft.fillScreen(TFT_BLACK);
@@ -8172,6 +8329,14 @@ void loop() {
       }
 
       drawVuRadialAudioMeter();
+
+      // Calcular FFT periódicamente
+      calculateFFT();
+      
+      // Dibujar analizadores de frecuencia
+      drawFrequencyAnalyzers();
+      
+      // Botón con flecha izquierda (retrocede a VU RADIAL - A)
 
       // Botón con flecha izquierda (retrocede a VU RADIAL - A)
       // Dibujar sólo si es la primera vez o si cambia el foco
