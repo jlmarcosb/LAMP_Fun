@@ -1,4 +1,4 @@
-// LAMP_Fun V.2.7.0
+// LAMP_Fun V.2.8.1
 // José Luís Marcos Bezos - Junio 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441 + MAX98357A
@@ -12,6 +12,7 @@
 #include <TFT_eSPI.h>
 #include <math.h>
 #include <ESP_I2S.h>
+#include <arduinoFFT.h>
 
 // ----------------- Audio I2S estéreo INMP441 -----------------
 
@@ -123,7 +124,18 @@ bool initI2SAudio() {
 // Leer las muestras de audio L y R mediante la API I2S moderna.
 // Devuelve valores RMS aproximados después de desplazar
 // las 24 bits útiles del INMP441.
+// TAMBIÉN acumula muestras para FFT si fftAccumReady es false.
 void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
+
+  // DEBUG: Verificar si se llama a esta función
+  static unsigned long lastDebug = 0;
+  if (millis() - lastDebug > 1000) {
+    lastDebug = millis();
+    Serial.print("readAudioSamples llamada. i2sAudioInitialized: ");
+    Serial.println(i2sAudioInitialized ? "YES" : "NO");
+  }
+
+
   sampleL = 0;
   sampleR = 0;
 
@@ -149,6 +161,17 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
   int totalWords = bytesRead / sizeof(int32_t);
   int frameCount = totalWords / 2;
 
+    
+  // DEBUG: Verificar frameCount
+  static unsigned long lastDebug2 = 0;
+  if (millis() - lastDebug2 > 1000) {
+    lastDebug2 = millis();
+    Serial.print("readAudioSamples: bytesRead="); Serial.print(bytesRead);
+    Serial.print(" totalWords="); Serial.print(totalWords);
+    Serial.print(" frameCount="); Serial.println(frameCount);
+  }
+  
+
   if (frameCount <= 0) {
     return;
   }
@@ -172,6 +195,7 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
 
     sumSqL += (int64_t)valueL * (int64_t)valueL;
     sumSqR += (int64_t)valueR * (int64_t)valueR;
+    
   }
 
   // Calcular el valor medio para eliminar el offset DC.
@@ -206,6 +230,7 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
 
   sampleL = (int32_t)rmsL;
   sampleR = (int32_t)rmsR;
+
 }
 
 // Convertir una muestra de audio a nivel "dB" 0..100
@@ -336,7 +361,7 @@ void updateAudioLevels() {
     sensitivityGain =
       vuRadialSensitivity / 50.0f;
   } else {
-    const float MAX_SENSITIVITY_GAIN = 4.0f;
+    const float MAX_SENSITIVITY_GAIN = 10.0f;
 
     float upperPosition =
       (vuRadialSensitivity - 50) / 50.0f;
@@ -401,7 +426,7 @@ void updateAudioLevels() {
   // alpha es independiente de Velocidad:
   // alpha bajo  -> respuesta más rápida.
   // alpha alto  -> respuesta más suave.
-  const float alpha = 0.25f;
+  const float alpha = 0.75f;
 
   audioLevelDbL = (int16_t)roundf(
     audioLevelDbLPrev * alpha +
@@ -448,7 +473,6 @@ void updateAudioLevels() {
   unsigned long peakFallInterval =
     200UL -
     ((unsigned long)vuRadialSpeed * 190UL / 100UL);
-
 
   if (peakFallInterval < 10UL) {
     peakFallInterval = 10UL;
@@ -499,15 +523,11 @@ void updateAudioLevels() {
 // ----------------- Config WiFi / NTP -----------------
 
 const char* NTP_SERVER = "pool.ntp.org";
-
 const char* WIFI_NAMESPACE = "wifi_cfg";
-
 const int WIFI_SSID_BUF_LEN = 32;
 const int WIFI_PWD_BUF_LEN  = 64;
-
 char wifiSsid[WIFI_SSID_BUF_LEN + 1] = {0};
 char wifiPwdEnc[WIFI_PWD_BUF_LEN + 1] = {0};
-
 bool hasWifiCredentials = false;
 
 // Reintento WiFi
@@ -830,28 +850,48 @@ void initRelojSliderPositions() {
 
 // ---------- Efecto VU RADIAL ----------
 
-
 // Configuración de usuario para VU RADIAL (colores del degradado)
 uint16_t vuRadialColorStart = 0x001F; // azul por defecto
 uint16_t vuRadialColorEnd   = 0x07FF; // cian por defecto
 
-
 // Flag global: ¿el efecto VU RADIAL está activo?
 bool vuRadialEffectActive = false;
 
+// Picos azules para el efecto VU RADIAL sobre LEDs.
+// Se calculan igual que en el VU Meter del TFT.
+int16_t vuRadialLedPeakL = 0;
+int16_t vuRadialLedPeakR = 0;
+
+// Tiempo de última actualización de caída de picos en LEDs.
+unsigned long vuRadialLedPeakLastUpdateMillis = 0;
 
 // Knobs propios del slider de VU RADIAL (para colores)
 int vuRadialKnobStartPos = 0;
 int vuRadialKnobEndPos   = 0;
-
 
 // Foco de la pantalla VU RADIAL
 enum VuRadialFocus {
   VURADIAL_FOCUS_START,
   VURADIAL_FOCUS_END
 };
+
 VuRadialFocus vuRadialFocus = VURADIAL_FOCUS_START;
 
+// ---------- Foco avanzado para VU RADIAL - C ----------
+
+// Elementos de foco en VU RADIAL - C
+enum VuRadialCFocusElement {
+  VURADIAL_C_FOCUS_START_KNOB,   // knob de color inicial
+  VURADIAL_C_FOCUS_END_KNOB,     // knob de color final
+  VURADIAL_C_FOCUS_NEXT_BUTTON   // botón con flecha
+};
+
+// Elemento de foco actual en VU RADIAL - C
+VuRadialCFocusElement vuRadialCFocusElement = VURADIAL_C_FOCUS_START_KNOB;
+
+// true = modo edición (se puede modificar el color o ejecutar acción)
+// false = modo pendiente (esperando pulsación para editar)
+bool vuRadialCEditing = false;
 
 // Inicializar posiciones de sliders de VU RADIAL a partir de colores actuales
 void initVuRadialSliderPositions() {
@@ -873,10 +913,19 @@ enum VuRadialAFocus {
   VURADIAL_A_FOCUS_THRESHOLD,
   VURADIAL_A_FOCUS_SPEED,
   VURADIAL_A_FOCUS_CHANNEL,
-  VURADIAL_A_FOCUS_BUTTON
+  VURADIAL_A_FOCUS_LEFT_BUTTON,
+  VURADIAL_A_FOCUS_RIGHT_BUTTON
 };
 
 VuRadialAFocus vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
+bool vuRadialAEditing = false;  // Modo edición para VU RADIAL - A
+
+// Foco de la pantalla VU RADIAL - F
+enum VuRadialFFocus {
+  VURADIAL_F_FOCUS_LEFT_BUTTON = 0
+};
+
+VuRadialFFocus vuRadialFFocus = VURADIAL_F_FOCUS_LEFT_BUTTON;
 
 // Configuración de audio VU RADIAL - A
 uint8_t vuRadialSensitivity = 50; // 0..100
@@ -890,6 +939,11 @@ void initVuRadialAudioPositions() {
   if (vuRadialSpeed > 100) vuRadialSpeed = 100;
   if (vuRadialChannelMode > 3) vuRadialChannelMode = 3;
   vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
+}
+
+// Parar VU RADIAL
+void stopVuRadialEffect() {
+  stopAllEffects();
 }
 
 // ----------------- Backlight TFT -----------------
@@ -940,6 +994,7 @@ enum Screen {
   SCREEN_SETTINGS_RELOJ,
   SCREEN_SETTINGS_VURADIAL,
   SCREEN_SETTINGS_VURADIAL_A,
+  SCREEN_SETTINGS_VURADIAL_F,
   SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
@@ -1414,6 +1469,9 @@ void stopAllEffects() {
   barridoEffectActive = false;
   persianaEffectActive = false;
   relojEffectActive = false;
+  vuRadialEffectActive = false;
+  vuRadialLedPeakL = 0;
+  vuRadialLedPeakR = 0;
   anyEffectActive   = false;
 
   // Apagado forzoso en hardware
@@ -2428,6 +2486,342 @@ void updateRelojEffect() {
   FastLED.show();
 }
 
+// Actualizar efecto VU RADIAL sobre los LEDs.
+void updateVuRadialEffect() {
+  if (!vuRadialEffectActive) {
+    return;
+  }
+
+  // Actualizar niveles de audio si no estamos en la pantalla
+  // VU RADIAL - A (allí ya se actualizan en loop()).
+  if (currentScreen != SCREEN_SETTINGS_VURADIAL_A) {
+    updateAudioLevels();
+  }
+
+  // Limpiar todos los LEDs antes de dibujar.
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CRGB::Black;
+  }
+
+  // Mapeo de LEDs por aro para canal izquierdo.
+  // Índice 0 no se usa; aros 1..7.
+  const int leftMaxLed[8] = {0, 30, 24, 20, 16, 12, 8, 6};
+
+  // Mapeo de LEDs por aro para canal derecho.
+  // rightMinLed: led de mayor número (nivel bajo).
+  // rightMaxLed: led de menor número (nivel alto).
+  const int rightMinLed[8] = {0, 60, 48, 40, 32, 24, 16, 12};
+  const int rightMaxLed[8] = {0, 32, 26, 22, 18, 14, 10, 8};
+
+  // Niveles efectivos para LEDs.
+  int levelL = audioLevelDbL;
+  int levelR = audioLevelDbR;
+
+  // Aplicar umbral también a los LEDs.
+  if (levelL < vuRadialThreshold) {
+    levelL = 0;
+  }
+
+  if (levelR < vuRadialThreshold) {
+    levelR = 0;
+  }
+
+  // Calcular posición de LED para cada nivel.
+  //
+  // level = 0   -> ledIndex = 0 (ningún LED encendido)
+  // level = 100 -> ledIndex = maxLedIndex
+  int leftLedIndex[8];
+  int rightLedIndex[8];
+
+  for (int ring = 1; ring <= 7; ring++) {
+    int maxIndex = leftMaxLed[ring] - 1;
+    leftLedIndex[ring] = (levelL * maxIndex) / 100;
+
+    // Canal derecho: número de LEDs entre rightMaxLed y rightMinLed (inclusive).
+    int rightMaxIndex = rightMinLed[ring] - rightMaxLed[ring] + 1;
+    // Con levelR = 100, rightLedIndex debe ser rightMaxIndex (último LED).
+    rightLedIndex[ring] = (levelR * rightMaxIndex) / 100;
+  }
+
+  // Interpolar color entre vuRadialColorStart y vuRadialColorEnd.
+  auto interpolateColor = [&](int level) -> CRGB {
+    if (level <= 0) {
+      uint8_t r, g, b;
+      rgbFrom565(vuRadialColorStart, r, g, b);
+      return CRGB(r, g, b);
+    }
+
+    if (level >= 100) {
+      uint8_t r, g, b;
+      rgbFrom565(vuRadialColorEnd, r, g, b);
+      return CRGB(r, g, b);
+    }
+
+    uint8_t r0, g0, b0;
+    uint8_t r1, g1, b1;
+    rgbFrom565(vuRadialColorStart, r0, g0, b0);
+    rgbFrom565(vuRadialColorEnd, r1, g1, b1);
+
+    float t = level / 100.0f;
+
+    uint8_t r = (uint8_t)(r0 + (r1 - r0) * t);
+    uint8_t g = (uint8_t)(g0 + (g1 - g0) * t);
+    uint8_t b = (uint8_t)(b0 + (b1 - b0) * t);
+
+    return CRGB(r, g, b);
+  };
+
+  // Color azul fijo para picos.
+  const CRGB peakBlue(0, 0, 255);
+
+  // Actualizar picos azules (caída según Velocidad).
+  unsigned long now = millis();
+
+  unsigned long peakFallInterval =
+    200UL -
+    ((unsigned long)vuRadialSpeed * 190UL / 100UL);
+
+  if (peakFallInterval < 10UL) {
+    peakFallInterval = 10UL;
+  }
+
+  if (now - vuRadialLedPeakLastUpdateMillis >= peakFallInterval) {
+    vuRadialLedPeakLastUpdateMillis = now;
+
+    if (vuRadialLedPeakL > levelL) {
+      vuRadialLedPeakL -= AUDIO_PEAK_FALL_STEP;
+      if (vuRadialLedPeakL < levelL) {
+        vuRadialLedPeakL = levelL;
+      }
+    }
+
+    if (vuRadialLedPeakR > levelR) {
+      vuRadialLedPeakR -= AUDIO_PEAK_FALL_STEP;
+      if (vuRadialLedPeakR < levelR) {
+        vuRadialLedPeakR = levelR;
+      }
+    }
+  }
+
+  // Si el nivel actual supera el pico, el pico sube inmediatamente.
+  if (levelL > vuRadialLedPeakL) {
+    vuRadialLedPeakL = levelL;
+  }
+
+  if (levelR > vuRadialLedPeakR) {
+    vuRadialLedPeakR = levelR;
+  }
+
+  // Dibujar canal izquierdo.
+  bool showLeft =
+    (vuRadialChannelMode == 0) ||
+    (vuRadialChannelMode == 2) ||
+    (vuRadialChannelMode == 3);
+
+  if (showLeft) {
+    for (int ring = 1; ring <= 7; ring++) {
+      int startLed = 2;
+      int endLed = leftMaxLed[ring];
+
+      // Dibujar nivel de audio.
+      for (int i = 0; i <= leftLedIndex[ring]; i++) {
+        int ledNum = startLed + i;
+        if (ledNum > endLed) break;
+
+        int levelForColor =
+          (leftLedIndex[ring] > 0)
+            ? (i * 100) / leftLedIndex[ring]
+            : 0;
+
+        CRGB color = interpolateColor(levelForColor);
+        int idx = ringLedIndex(ring - 1, ledNum - 1);
+        leds[idx] = color;
+      }
+
+      // Dibujar pico azul.
+      int peakLedIndex =
+        (vuRadialLedPeakL * (leftMaxLed[ring] - 1)) / 100;
+
+      if (peakLedIndex > leftLedIndex[ring]) {
+        int ledNum = startLed + peakLedIndex;
+        if (ledNum <= endLed) {
+          int idx = ringLedIndex(ring - 1, ledNum - 1);
+          leds[idx] = peakBlue;
+        }
+      }
+    }
+  }
+
+  // Dibujar canal derecho.
+  bool showRight =
+    (vuRadialChannelMode == 1) ||
+    (vuRadialChannelMode == 2) ||
+    (vuRadialChannelMode == 3);
+
+  if (showRight) {
+    for (int ring = 1; ring <= 7; ring++) {
+      int startLed = rightMaxLed[ring];
+      int endLed = rightMinLed[ring];
+
+      // Dibujar nivel de audio.
+      for (int i = 0; i <= rightLedIndex[ring]; i++) {
+        int ledNum = endLed - i;
+        if (ledNum < startLed) break;
+
+        int levelForColor =
+          (rightLedIndex[ring] > 0)
+            ? (i * 100) / rightLedIndex[ring]
+            : 0;
+
+        CRGB color = interpolateColor(levelForColor);
+        int idx = ringLedIndex(ring - 1, ledNum - 1);
+        leds[idx] = color;
+      }
+
+      // Dibujar pico azul.
+      // Usar el mismo rightMaxIndex que en el cálculo de rightLedIndex.
+      int rightMaxIndexForPeak = rightMinLed[ring] - rightMaxLed[ring] + 1;
+      int peakLedIndex =
+        (vuRadialLedPeakR * rightMaxIndexForPeak) / 100;
+
+
+      if (peakLedIndex > rightLedIndex[ring]) {
+        int ledNum = endLed - peakLedIndex;
+        if (ledNum >= startLed) {
+          int idx = ringLedIndex(ring - 1, ledNum - 1);
+          leds[idx] = peakBlue;
+        }
+      }
+    }
+  }
+
+  // Aro 8: indicador de canal.
+  if (vuRadialChannelMode == 0) {
+    // L: LEDs 2, 3, 4 en azul.
+    for (int i = 2; i <= 4; i++) {
+      int idx = ringLedIndex(7, i - 1);
+      leds[idx] = peakBlue;
+    }
+  } else if (vuRadialChannelMode == 1) {
+    // R: LEDs 6, 7, 8 en azul.
+    for (int i = 6; i <= 8; i++) {
+      int idx = ringLedIndex(7, i - 1);
+      leds[idx] = peakBlue;
+    }
+  } else if (vuRadialChannelMode == 2) {
+    // L+R: LEDs 2, 3, 4, 6, 7, 8 en azul.
+    int patternL[] = {2, 3, 4};
+    int patternR[] = {6, 7, 8};
+
+    for (int i = 0; i < 3; i++) {
+      int idx = ringLedIndex(7, patternL[i] - 1);
+      leds[idx] = peakBlue;
+    }
+
+    for (int i = 0; i < 3; i++) {
+      int idx = ringLedIndex(7, patternR[i] - 1);
+      leds[idx] = peakBlue;
+    }
+  } else if (vuRadialChannelMode == 3) {
+    // Estéreo: LEDs 2, 3, 4 para L; LEDs 6, 7, 8 para R.
+    // Se representan niveles de audio con el mismo degradado.
+    int leftLevel = levelL;
+    int rightLevel = levelR;
+
+
+    // L: led 2 = nivel menor, led 4 = nivel mayor.
+    // 3 LEDs: 2, 3, 4.
+    // level = 0   -> 0 LEDs
+    // level >= 95 -> 3 LEDs
+    int leftLedsOn = (leftLevel * 3) / 100;
+    if (leftLevel >= 95) leftLedsOn = 3;
+    if (leftLedsOn > 3) leftLedsOn = 3;
+    if (leftLedsOn < 0) leftLedsOn = 0;
+
+
+    for (int i = 0; i < leftLedsOn; i++) {
+      int ledNum = 2 + i;  // 2, 3, 4
+      // levelForColor: 0 para el primer LED, 100 para el último encendido
+      int levelForColor = (leftLedsOn > 1)
+        ? (i * 100) / (leftLedsOn - 1)
+        : 0;
+      CRGB color = interpolateColor(levelForColor);
+      int idx = ringLedIndex(7, ledNum - 1);
+      leds[idx] = color;
+    }
+
+
+    // R: led 8 = nivel menor, led 6 = nivel mayor.
+    // 3 LEDs: 6, 7, 8.
+    int rightLedsOn = (rightLevel * 3) / 100;
+    if (rightLevel >= 95) rightLedsOn = 3;
+    if (rightLedsOn > 3) rightLedsOn = 3;
+    if (rightLedsOn < 0) rightLedsOn = 0;
+
+
+    for (int i = 0; i < rightLedsOn; i++) {
+      int ledNum = 8 - i;  // 8, 7, 6
+      int levelForColor = (rightLedsOn > 1)
+        ? (i * 100) / (rightLedsOn - 1)
+        : 0;
+      CRGB color = interpolateColor(levelForColor);
+      int idx = ringLedIndex(7, ledNum - 1);
+      leds[idx] = color;
+    }
+  }
+
+  // Aro 9: indicador de sobre-señal.
+  if (audioSensitivitySaturated) {
+    int idx = ringLedIndex(8, 0);
+    leds[idx] = CRGB(255, 0, 0);
+  }
+
+  // LEDs de Sensibilidad (termómetro blanco).
+  // Aros 1..7, led 1 de cada aro.
+  int sensitivityRing = (vuRadialSensitivity * 6) / 100;
+  if (sensitivityRing > 6) sensitivityRing = 6;
+
+  for (int ring = 0; ring <= sensitivityRing; ring++) {
+    int idx = ringLedIndex(ring, 0);
+    leds[idx] = CRGB(255, 255, 255);
+  }
+
+  // LEDs de Velocidad (termómetro blanco).
+  // Aro 7: led 7 (mínima velocidad)
+  // Aro 6: led 9
+  // Aro 5: led 13
+  // Aro 4: led 17
+  // Aro 3: led 21
+  // Aro 2: led 25
+  // Aro 1: led 31 (máxima velocidad)
+  //
+  // Con Velocidad = 0: solo aro 7 encendido.
+  // Con Velocidad = 100: todos los aros 7..1 encendidos.
+  int speedRing = (vuRadialSpeed * 6) / 100;
+  if (speedRing > 6) speedRing = 6;
+  if (speedRing < 0) speedRing = 0;
+
+  const int speedLedsByRing[7] = {31, 25, 21, 17, 13, 9, 7};
+
+  // Siempre encender al menos el aro 7 (índice 6, led 7).
+  int baseIdx = ringLedIndex(6, speedLedsByRing[6] - 1);
+  leds[baseIdx] = CRGB(255, 255, 255);
+
+  // Encender LEDs adicionales desde el aro 6 hacia el aro 1.
+  // speedRing = 0 -> solo aro 7
+  // speedRing = 1 -> aros 7, 6
+  // ...
+  // speedRing = 6 -> todos los aros 7, 6, 5, 4, 3, 2, 1
+  for (int i = 0; i < speedRing; i++) {
+    int aroIndex = 6 - 1 - i;
+    int idx = ringLedIndex(aroIndex, speedLedsByRing[aroIndex] - 1);
+    leds[idx] = CRGB(255, 255, 255);
+  }
+
+  FastLED.setBrightness(brightness);
+  FastLED.show();
+}
+
 // ----------------- Icono WiFi -----------------
 
 const int WIFI_ICON_X = 215;
@@ -2545,7 +2939,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.7.0", 120, 85);
+  tft.drawString("V.2.8.1", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -4980,6 +5374,122 @@ void drawSettingsRelojScreen() {
   tft.drawString("Iniciar", btnX + btnW / 2, btnY + btnH / 2);
 }
 
+// Dibujar flecha hacia la derecha dentro de un botón.
+// btnX, btnY, btnW, btnH: geometría del botón.
+// arrowColor: color de la flecha (blanco o negro, según foco).
+void drawRightArrowButton(int btnX, int btnY, int btnW, int btnH, uint16_t arrowColor) {
+  // Centro del botón
+  int cx = btnX + btnW / 2;
+  int cy = btnY + btnH / 2;
+
+  // Tamaño de la flecha
+  int arrowW = 20; // anchura del triángulo
+  int arrowH = 14; // altura del triángulo
+  int tailW = 20;  // longitud de la cola
+  int tailH = 6;   // grosor de la cola
+
+  // Anchura total de la flecha (triángulo + cola)
+  int totalW = arrowW + tailW;
+
+  // Queremos que el centro de totalW coincida con cx.
+  // La flecha va desde (cx - totalW/2) hasta (cx + totalW/2).
+  // El triángulo está a la derecha, la cola a la izquierda.
+  
+  // Posición X del centro de la flecha completa
+  int arrowCenterX = cx;
+
+  // Base del triángulo: está en arrowCenterX - tailW/2 + arrowW/2
+  // Pero lo más fácil es calcular baseX directamente:
+  // La cola va desde (baseX - tailW) hasta baseX.
+  // El triángulo va desde baseX hasta baseX + arrowW.
+  // El centro de la flecha completa es: (baseX - tailW + baseX + arrowW) / 2 = baseX + (arrowW - tailW) / 2
+  // Queremos que eso sea igual a arrowCenterX.
+  // baseX + (arrowW - tailW) / 2 = arrowCenterX
+  // baseX = arrowCenterX - (arrowW - tailW) / 2
+  
+  int baseX = arrowCenterX - (arrowW - tailW) / 2;
+  int tipX  = baseX + arrowW;
+
+  int topY    = cy - arrowH / 2;
+  int bottomY = cy + arrowH / 2;
+
+  // Relleno de la flecha (triángulo)
+  tft.fillTriangle(
+    tipX, cy,          // punta
+    baseX, topY,       // arriba izquierda
+    baseX, bottomY,    // abajo izquierda
+    arrowColor
+  );
+
+  // Cola de la flecha
+  int tailY = cy - tailH / 2;
+
+  // La cola va desde (baseX - tailW) hasta baseX
+  tft.fillRect(
+    baseX - tailW, // inicio de la cola
+    tailY,         // posición Y centrada
+    tailW,         // longitud
+    tailH,         // grosor
+    arrowColor
+  );
+}
+
+// Dibujar flecha hacia la izquierda dentro de un botón.
+// btnX, btnY, btnW, btnH: geometría del botón.
+// arrowColor: color de la flecha (blanco o negro, según foco).
+void drawLeftArrowButton(int btnX, int btnY, int btnW, int btnH, uint16_t arrowColor) {
+  // Centro del botón
+  int cx = btnX + btnW / 2;
+  int cy = btnY + btnH / 2;
+
+
+  // Tamaño de la flecha
+  int arrowW = 20; // anchura del triángulo
+  int arrowH = 14; // altura del triángulo
+  int tailW = 20;  // longitud de la cola
+  int tailH = 6;   // grosor de la cola
+
+
+  // Anchura total de la flecha (triángulo + cola)
+  int totalW = arrowW + tailW;
+
+
+  // Posición X del centro de la flecha completa
+  int arrowCenterX = cx;
+
+
+  // Base del triángulo: ahora el triángulo está a la izquierda
+  int baseX = arrowCenterX + (arrowW - tailW) / 2;
+  int tipX  = baseX - arrowW;
+
+
+  int topY    = cy - arrowH / 2;
+  int bottomY = cy + arrowH / 2;
+
+
+  // Relleno de la flecha (triángulo)
+  tft.fillTriangle(
+    tipX, cy,          // punta (hacia la izquierda)
+    baseX, topY,       // arriba derecha
+    baseX, bottomY,    // abajo derecha
+    arrowColor
+  );
+
+
+  // Cola de la flecha
+  int tailY = cy - tailH / 2;
+
+
+  // La cola va desde baseX hasta (baseX + tailW)
+  tft.fillRect(
+    baseX,           // inicio de la cola
+    tailY,           // posición Y centrada
+    tailW,           // longitud
+    tailH,           // grosor
+    arrowColor
+  );
+}
+
 // ---------- Pantalla de configuración VU RADIAL ----------
 
 void drawSettingsVuRadialScreen() {
@@ -5030,18 +5540,40 @@ void drawSettingsVuRadialScreen() {
   int knobRadius = 7;
   int knobCenterY = sliderY - 14;
 
-  // Knob inicio izquierdo
+  // --- Knob inicio izquierdo ---
   int xStart = sliderX + vuRadialKnobStartPos;
   tft.drawFastVLine(xStart, sliderY, sliderH, TFT_WHITE);
-  tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+
+  // Dibujar primero el círculo relleno
   uint8_t rr, gg, bb;
   uint16_t c = colorFromSliderEffects((uint8_t)vuRadialKnobStartPos, rr, gg, bb);
+  if (vuRadialKnobStartPos >= 211) {
+    rr = 255;
+    gg = 255;
+    bb = 255;
+    c = tft.color565(rr, gg, bb);
+  }
   tft.fillCircle(xStart, knobCenterY, knobRadius - 1, c);
 
-  // Knob final derecho
+  // Dibujar el contorno: si el foco está aquí y no estamos en edición, contorno grueso (6 píxeles)
+  if (vuRadialCFocusElement == VURADIAL_C_FOCUS_START_KNOB && !vuRadialCEditing) {
+    // Contorno grueso: amarillo (radio 10), amarillo (radio 9), azul (radio 8), azul (radio 7), amarillo (radio 6), amarillo (radio 5)
+    tft.drawCircle(xStart, knobCenterY, 10, TFT_YELLOW);  // radio 10 (exterior)
+    tft.drawCircle(xStart, knobCenterY, 9,  TFT_YELLOW);  // radio 9
+    tft.drawCircle(xStart, knobCenterY, 8,  TFT_BLUE);    // radio 8
+    tft.drawCircle(xStart, knobCenterY, 7,  TFT_BLUE);    // radio 7
+    tft.drawCircle(xStart, knobCenterY, 6,  TFT_YELLOW);  // radio 6
+    tft.drawCircle(xStart, knobCenterY, 5,  TFT_YELLOW);  // radio 5 (interior)
+  } else {
+    // Contorno normal (1 píxel blanco)
+    tft.drawCircle(xStart, knobCenterY, knobRadius, TFT_WHITE);
+  }
+
+  // --- Knob final derecho ---
   int xEnd = sliderX + vuRadialKnobEndPos;
   tft.drawFastVLine(xEnd, sliderY, sliderH, TFT_WHITE);
-  tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+
+  // Dibujar primero el círculo relleno
   uint8_t rr2, gg2, bb2;
   uint16_t c2 = colorFromSliderEffects((uint8_t)vuRadialKnobEndPos, rr2, gg2, bb2);
   if (vuRadialKnobEndPos >= 211) {
@@ -5051,6 +5583,20 @@ void drawSettingsVuRadialScreen() {
     c2 = tft.color565(rr2, gg2, bb2);
   }
   tft.fillCircle(xEnd, knobCenterY, knobRadius - 1, c2);
+
+  // Dibujar el contorno: si el foco está aquí y no estamos en edición, contorno grueso (6 píxeles)
+  if (vuRadialCFocusElement == VURADIAL_C_FOCUS_END_KNOB && !vuRadialCEditing) {
+    // Contorno grueso: amarillo (radio 10), amarillo (radio 9), azul (radio 8), azul (radio 7), amarillo (radio 6), amarillo (radio 5)
+    tft.drawCircle(xEnd, knobCenterY, 10, TFT_YELLOW);  // radio 10 (exterior)
+    tft.drawCircle(xEnd, knobCenterY, 9,  TFT_YELLOW);  // radio 9
+    tft.drawCircle(xEnd, knobCenterY, 8,  TFT_BLUE);    // radio 8
+    tft.drawCircle(xEnd, knobCenterY, 7,  TFT_BLUE);    // radio 7
+    tft.drawCircle(xEnd, knobCenterY, 6,  TFT_YELLOW);  // radio 6
+    tft.drawCircle(xEnd, knobCenterY, 5,  TFT_YELLOW);  // radio 5 (interior)
+  } else {
+    // Contorno normal (1 píxel blanco)
+    tft.drawCircle(xEnd, knobCenterY, knobRadius, TFT_WHITE);
+  }
 
   // --- Texto RGB del knob activo ---
   uint16_t activeColor = (vuRadialFocus == VURADIAL_FOCUS_END) ? vuRadialColorEnd : vuRadialColorStart;
@@ -5075,15 +5621,15 @@ void drawSettingsVuRadialScreen() {
   // Borrar fondo de la zona
   tft.fillRect(boxX0 - 12, boxY - 2, boxW * 2 + 24, boxH + 4, TFT_BLACK);
 
-  // Indicadores de foco alrededor de las cajas
+  // Indicadores de foco alrededor de las cajas (solo en modo edición)
   tft.setTextDatum(MR_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  if (vuRadialFocus == VURADIAL_FOCUS_START) {
+  if (vuRadialCEditing && vuRadialCFocusElement == VURADIAL_C_FOCUS_START_KNOB) {
     tft.drawString(">", boxX0 - 4, boxY + boxH / 2);
   }
 
   tft.setTextDatum(ML_DATUM);
-  if (vuRadialFocus == VURADIAL_FOCUS_END) {
+  if (vuRadialCEditing && vuRadialCFocusElement == VURADIAL_C_FOCUS_END_KNOB) {
     tft.drawString("<", boxX1 + boxW + 4, boxY + boxH / 2);
   }
 
@@ -5098,10 +5644,41 @@ void drawSettingsVuRadialScreen() {
     boxEndColor = tft.color565(255, 255, 255);
   }
   tft.fillRect(boxX1 + 1, boxY + 1, boxW - 2, boxH - 2, boxEndColor);
+
+  // --- Botón con flecha (avanza a VU RADIAL - A) ---
+  // Usar las mismas constantes que VU RADIAL - A para alineación vertical y tamaño
+
+  int btnW = 60;   // Mismo ancho que VU RADIAL - A
+  int btnH = 24;   // Mismo alto que VU RADIAL - A
+  int btnY = 210;  // Misma altura que VU RADIAL - A
+  int btnX = (240 - btnW) / 2;  // Centrado horizontalmente
+
+  // El foco está en el botón cuando vuRadialCFocusElement == VURADIAL_C_FOCUS_NEXT_BUTTON
+  bool focusedButton = (vuRadialCFocusElement == VURADIAL_C_FOCUS_NEXT_BUTTON);
+
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t arrowColor = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  // Fondo del botón (usar fillRoundRect como en VU RADIAL - A)
+  tft.fillRoundRect(btnX, btnY, btnW, btnH, 4, btnFill);
+
+  // Contorno: si el foco está aquí y no estamos en edición, contorno grueso (6 píxeles)
+  if (focusedButton && !vuRadialCEditing) {
+    tft.drawRoundRect(btnX - 3, btnY - 3, btnW + 6, btnH + 6, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX - 2, btnY - 2, btnW + 4, btnH + 4, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX - 1, btnY - 1, btnW + 2, btnH + 2, 4, TFT_BLUE);
+    tft.drawRoundRect(btnX,     btnY,     btnW,     btnH,     4, TFT_BLUE);
+    tft.drawRoundRect(btnX + 1, btnY + 1, btnW - 2, btnH - 2, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX + 2, btnY + 2, btnW - 4, btnH - 4, 4, TFT_YELLOW);
+  } else {
+    tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+  }
+
+  // Dibujar flecha en lugar de texto
+  drawRightArrowButton(btnX, btnY, btnW, btnH, arrowColor);
 }
 
 // ---------- Pantalla de configuración VU RADIAL - A ----------
-
 // Geometría del VU meter estéreo horizontal.
 //
 // Cada línea es horizontal y está formada por barras verticales
@@ -5401,7 +5978,16 @@ void drawVuRadialAudioSlider(
 
   int knobY = trackY + VURADIAL_AUDIO_SLIDER_H / 2;
 
-  uint16_t knobFill = focused ? TFT_WHITE : sliderDark;
+  // Knob: blanco en modo edición, azul cuando tiene el foco 
+  // pero no está en edición, sliderDark por defecto
+  uint16_t knobFill;
+  if (focused && vuRadialAEditing) {
+    knobFill = TFT_WHITE;  // Blanco en modo edición
+  } else if (focused) {
+    knobFill = TFT_BLUE;  // Azul cuando tiene el foco pero no está en edición
+  } else {
+    knobFill = sliderDark;  // sliderDark por defecto
+  }
 
   tft.fillCircle(
     knobX,
@@ -5525,8 +6111,15 @@ void drawVuRadialAudioChannelSlider(
     firstX +
     ((lastX - firstX) * channelMode) / 3;
 
-  uint16_t knobFill =
-    focused ? TFT_WHITE : TFT_DARKGREY;
+  // Knob: blanco en modo edición, azul cuando tiene el foco pero no está en edición, TFT_DARKGREY por defecto
+  uint16_t knobFill;
+  if (focused && vuRadialAEditing) {
+    knobFill = TFT_WHITE;  // Blanco en modo edición
+  } else if (focused) {
+    knobFill = TFT_BLUE;  // Azul cuando tiene el foco pero no está en edición
+  } else {
+    knobFill = TFT_DARKGREY;  // TFT_DARKGREY por defecto
+  }
 
   tft.fillCircle(
     knobX,
@@ -5569,58 +6162,75 @@ void clearVuRadialAudioSliderDynamic(int trackY) {
   );
 }
 
-// Borrar únicamente la zona del botón Iniciar.
+// Borrar únicamente la zona de los dos botones con flechas.
 void clearVuRadialAudioButton() {
+  int btnW = 60;
+  int spacing = 20;
+  int totalW = btnW * 2 + spacing;
+  int btnXLeft = (240 - totalW) / 2;
+
   tft.fillRect(
-    VURADIAL_AUDIO_BUTTON_X - 10,
+    btnXLeft - 10,
     VURADIAL_AUDIO_BUTTON_Y - 10,
-    VURADIAL_AUDIO_BUTTON_W + 20,
+    totalW + 20,
     VURADIAL_AUDIO_BUTTON_H + 20,
     TFT_BLACK
   );
 }
 
-// Dibujar únicamente el botón Iniciar.
+// Dibujar los dos botones con flechas (izquierda y derecha).
 void drawVuRadialAudioButton() {
-  bool focusedButton =
-    (vuRadialAFocus == VURADIAL_A_FOCUS_BUTTON);
+  bool focusedLeft = (vuRadialAFocus == VURADIAL_A_FOCUS_LEFT_BUTTON);
+  bool focusedRight = (vuRadialAFocus == VURADIAL_A_FOCUS_RIGHT_BUTTON);
 
-  uint16_t buttonFill =
-    focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnFillLeft = focusedLeft ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t btnFillRight = focusedRight ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t arrowColorLeft = focusedLeft ? TFT_BLACK : TFT_WHITE;
+  uint16_t arrowColorRight = focusedRight ? TFT_BLACK : TFT_WHITE;
 
-  uint16_t buttonText =
-    focusedButton ? TFT_BLACK : TFT_WHITE;
+  int btnY = VURADIAL_AUDIO_BUTTON_Y;
+  int btnW = 60;  // Ancho de cada botón (más pequeño para que caben dos)
+  int btnH = VURADIAL_AUDIO_BUTTON_H;
+  int spacing = 20;  // Espacio entre botones y bordes
+  int totalW = btnW * 2 + spacing;  // Ancho total de los dos botones + espacio entre ellos
+  int btnXLeft = (240 - totalW) / 2;  // Posición X del botón izquierdo
+  int btnXRight = btnXLeft + btnW + spacing;  // Posición X del botón derecho
 
+  // Botón izquierdo (flecha izquierda)
+  tft.fillRoundRect(btnXLeft, btnY, btnW, btnH, 4, btnFillLeft);
 
-  tft.fillRoundRect(
-    VURADIAL_AUDIO_BUTTON_X,
-    VURADIAL_AUDIO_BUTTON_Y,
-    VURADIAL_AUDIO_BUTTON_W,
-    VURADIAL_AUDIO_BUTTON_H,
-    4,
-    buttonFill
-  );
+  // Contorno: si el foco está aquí, contorno grueso (6 píxeles)
+  if (focusedLeft) {
+    tft.drawRoundRect(btnXLeft - 3, btnY - 3, btnW + 6, btnH + 6, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXLeft - 2, btnY - 2, btnW + 4, btnH + 4, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXLeft - 1, btnY - 1, btnW + 2, btnH + 2, 4, TFT_BLUE);
+    tft.drawRoundRect(btnXLeft,     btnY,     btnW,     btnH,     4, TFT_BLUE);
+    tft.drawRoundRect(btnXLeft + 1, btnY + 1, btnW - 2, btnH - 2, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXLeft + 2, btnY + 2, btnW - 4, btnH - 4, 4, TFT_YELLOW);
+  } else {
+    tft.drawRoundRect(btnXLeft, btnY, btnW, btnH, 4, TFT_WHITE);
+  }
 
-  tft.drawRoundRect(
-    VURADIAL_AUDIO_BUTTON_X,
-    VURADIAL_AUDIO_BUTTON_Y,
-    VURADIAL_AUDIO_BUTTON_W,
-    VURADIAL_AUDIO_BUTTON_H,
-    4,
-    TFT_WHITE
-  );
+  // Dibujar flecha izquierda
+  drawLeftArrowButton(btnXLeft, btnY, btnW, btnH, arrowColorLeft);
 
-  tft.setTextSize(2);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(buttonText, buttonFill);
+  // Botón derecho (flecha derecha)
+  tft.fillRoundRect(btnXRight, btnY, btnW, btnH, 4, btnFillRight);
 
-  tft.drawString(
-    "Iniciar",
-    VURADIAL_AUDIO_BUTTON_X +
-      VURADIAL_AUDIO_BUTTON_W / 2,
-    VURADIAL_AUDIO_BUTTON_Y +
-      VURADIAL_AUDIO_BUTTON_H / 2
-  );
+  // Contorno: si el foco está aquí, contorno grueso (6 píxeles)
+  if (focusedRight) {
+    tft.drawRoundRect(btnXRight - 3, btnY - 3, btnW + 6, btnH + 6, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXRight - 2, btnY - 2, btnW + 4, btnH + 4, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXRight - 1, btnY - 1, btnW + 2, btnH + 2, 4, TFT_BLUE);
+    tft.drawRoundRect(btnXRight,     btnY,     btnW,     btnH,     4, TFT_BLUE);
+    tft.drawRoundRect(btnXRight + 1, btnY + 1, btnW - 2, btnH - 2, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnXRight + 2, btnY + 2, btnW - 4, btnH - 4, 4, TFT_YELLOW);
+  } else {
+    tft.drawRoundRect(btnXRight, btnY, btnW, btnH, 4, TFT_WHITE);
+  }
+
+  // Dibujar flecha derecha
+  drawRightArrowButton(btnXRight, btnY, btnW, btnH, arrowColorRight);
 }
 
 // Dibujar los cuatro sliders y el botón.
@@ -5732,7 +6342,12 @@ void redrawVuRadialAudioFocusedControl() {
       break;
 
 
-    case VURADIAL_A_FOCUS_BUTTON:
+    case VURADIAL_A_FOCUS_LEFT_BUTTON:
+      clearVuRadialAudioButton();
+      drawVuRadialAudioButton();
+      break;
+
+    case VURADIAL_A_FOCUS_RIGHT_BUTTON:
       clearVuRadialAudioButton();
       drawVuRadialAudioButton();
       break;
@@ -5779,6 +6394,71 @@ void drawSettingsVuRadialAudioScreen() {
 
   // Sliders y botón.
   drawVuRadialAudioControls();
+}
+
+// Dibujar la pantalla completa VU RADIAL - F.
+void drawVuRadialFScreen() {
+  tft.fillScreen(TFT_BLACK);
+
+  lastWifiBars = -1;
+  lastWifiTachado = false;
+
+  // Cabecera.
+  tft.fillRect(0, 0, 240, 30, TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("VU RADIAL - F", 120, 15);
+
+  drawWifiSignalIcon();
+
+  // Etiquetas estáticas del VU meter.
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString(
+    "L",
+    VURADIAL_AUDIO_LABEL_X,
+    VURADIAL_AUDIO_BAR_Y_L
+  );
+
+  tft.drawString(
+    "R",
+    VURADIAL_AUDIO_LABEL_X,
+    VURADIAL_AUDIO_BAR_Y_R
+  );
+
+  // VU meter inicial.
+  drawVuRadialAudioMeter();
+
+  // Botón con flecha izquierda (retrocede a VU RADIAL - A).
+  // Usar las mismas constantes que VU RADIAL - A para alineación vertical y tamaño
+  int btnW = 60;   // Mismo ancho que VU RADIAL - A
+  int btnH = 24;   // Mismo alto que VU RADIAL - A
+  int btnY = 210;  // Misma altura que VU RADIAL - A
+  int btnX = (240 - btnW) / 2;  // Centrado horizontalmente
+
+  bool focusedButton = (vuRadialFFocus == VURADIAL_F_FOCUS_LEFT_BUTTON);
+  uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+  uint16_t arrowColor = focusedButton ? TFT_BLACK : TFT_WHITE;
+
+  tft.fillRect(btnX, btnY, btnW, btnH, btnFill);
+
+  // Contorno: si el foco está aquí, contorno grueso (6 píxeles)
+  if (focusedButton) {
+    tft.drawRoundRect(btnX - 3, btnY - 3, btnW + 6, btnH + 6, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX - 2, btnY - 2, btnW + 4, btnH + 4, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX - 1, btnY - 1, btnW + 2, btnH + 2, 4, TFT_BLUE);
+    tft.drawRoundRect(btnX,     btnY,     btnW,     btnH,     4, TFT_BLUE);
+    tft.drawRoundRect(btnX + 1, btnY + 1, btnW - 2, btnH - 2, 4, TFT_YELLOW);
+    tft.drawRoundRect(btnX + 2, btnY + 2, btnW - 4, btnH - 4, 4, TFT_YELLOW);
+  } else {
+    tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+  }
+
+  // Dibujar flecha izquierda
+  drawLeftArrowButton(btnX, btnY, btnW, btnH, arrowColor);
 }
 
 // ---------- Menús WiFi ----------
@@ -6085,7 +6765,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.7.0",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.2.8.1",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Junio 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -6103,7 +6783,7 @@ void setup() {
 
   initI2SAudio();
 
-  Serial.println("LAMP_Fun V.2.7.0");
+  Serial.println("LAMP_Fun V.2.8.1");
 
   initBacklight();
 
@@ -6169,13 +6849,71 @@ void loop() {
     stepDir = readEncoderStep();
   }
 
-  static bool lastSw   = true;
-  bool        sw       = digitalRead(ENCODER_SW);
-  static bool lastBtn2 = true;
-  bool        btn2     = digitalRead(BUTTON2_PIN);
 
-  bool btn2Falling       = (!btn2 && lastBtn2);
-  bool encButtonFalling  = (!sw  && lastSw);
+  // Lectura antirrebote del pulsador principal del encoder.
+  static bool encButtonStableState = HIGH;
+  static bool encButtonLastReading = HIGH;
+  static unsigned long encButtonLastChangeMillis = 0;
+
+
+  // Lectura antirrebote del botón 2.
+  static bool button2StableState = HIGH;
+  static bool button2LastReading = HIGH;
+  static unsigned long button2LastChangeMillis = 0;
+
+
+  const unsigned long BUTTON_DEBOUNCE_MS = 35;
+  unsigned long buttonNow = millis();
+
+
+  bool encButtonReading = digitalRead(ENCODER_SW);
+  bool button2Reading   = digitalRead(BUTTON2_PIN);
+
+
+  if (encButtonReading != encButtonLastReading) {
+    encButtonLastChangeMillis = buttonNow;
+    encButtonLastReading = encButtonReading;
+  }
+
+
+  if (button2Reading != button2LastReading) {
+    button2LastChangeMillis = buttonNow;
+    button2LastReading = button2Reading;
+  }
+
+
+  bool encButtonFalling = false;
+  bool btn2Falling      = false;
+
+
+  if ((buttonNow - encButtonLastChangeMillis) >=
+      BUTTON_DEBOUNCE_MS) {
+    if (encButtonStableState != encButtonLastReading) {
+      bool previousState = encButtonStableState;
+      encButtonStableState = encButtonLastReading;
+
+
+      if (previousState == HIGH &&
+          encButtonStableState == LOW) {
+        encButtonFalling = true;
+      }
+    }
+  }
+
+
+  if ((buttonNow - button2LastChangeMillis) >=
+      BUTTON_DEBOUNCE_MS) {
+    if (button2StableState != button2LastReading) {
+      bool previousState = button2StableState;
+      button2StableState = button2LastReading;
+
+
+      if (previousState == HIGH &&
+          button2StableState == LOW) {
+        btn2Falling = true;
+      }
+    }
+  }
 
   if (useAutoTime && hasWifiCredentials) {
     unsigned long now = millis();
@@ -6220,6 +6958,11 @@ void loop() {
 
       if (stepDir != 0 || encButtonFalling) {
         if (anyEffectActive) {
+          if (vuRadialEffectActive) {
+            vuRadialEffectActive = false;
+            vuRadialLedPeakL = 0;
+            vuRadialLedPeakR = 0;
+          }
           stopAllEffects();
           updateLeds();
         }
@@ -6231,6 +6974,11 @@ void loop() {
 
       if (btn2Falling) {
         if (anyEffectActive) {
+          if (vuRadialEffectActive) {
+            vuRadialEffectActive = false;
+            vuRadialLedPeakL = 0;
+            vuRadialLedPeakR = 0;
+          }
           stopAllEffects();
         }
         settingsMainIndex = 0;
@@ -7077,57 +7825,109 @@ void loop() {
     case SCREEN_SETTINGS_VURADIAL: {
       // Pantalla de configuración de VU RADIAL (color)
 
+      // Inicializar foco la primera vez que entramos
+      static bool firstEntry = true;
+      if (firstEntry) {
+        vuRadialCFocusElement = VURADIAL_C_FOCUS_START_KNOB;
+        vuRadialCEditing = false;
+        firstEntry = false;
+      }
+
       if (stepDir != 0) {
         int dir = (stepDir > 0) ? 1 : -1;
-        int step = 5;
 
-        if (vuRadialFocus == VURADIAL_FOCUS_START) {
-          vuRadialKnobStartPos += dir * step;
-          if (vuRadialKnobStartPos < 0)   vuRadialKnobStartPos = 0;
-          if (vuRadialKnobStartPos > 211) vuRadialKnobStartPos = 211;
-
-          uint8_t rr, gg, bb;
-          vuRadialColorStart = colorFromSliderEffects((uint8_t)vuRadialKnobStartPos, rr, gg, bb);
-          saveConfigBasic();
-          drawSettingsVuRadialScreen();
-
-        } else if (vuRadialFocus == VURADIAL_FOCUS_END) {
-          vuRadialKnobEndPos += dir * step;
-          if (vuRadialKnobEndPos < 0)   vuRadialKnobEndPos = 0;
-          if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
-
-          uint8_t rr2, gg2, bb2;
-          vuRadialColorEnd = colorFromSliderEffects((uint8_t)vuRadialKnobEndPos, rr2, gg2, bb2);
-          if (vuRadialKnobEndPos >= 211) {
-            rr2 = 255;
-            gg2 = 255;
-            bb2 = 255;
-            vuRadialColorEnd = tft.color565(rr2, gg2, bb2);
+        if (!vuRadialCEditing) {
+          // Modo pendiente: el giro cambia el elemento de foco
+          if (dir > 0) {
+            // Giro a la derecha: avanzar en el ciclo
+            vuRadialCFocusElement = (VuRadialCFocusElement)((vuRadialCFocusElement + 1) % 3);
+          } else {
+            // Giro a la izquierda: retroceder en el ciclo
+            vuRadialCFocusElement = (VuRadialCFocusElement)((vuRadialCFocusElement + 2) % 3);
           }
-
-          saveConfigBasic();
           drawSettingsVuRadialScreen();
+        } else {
+          // Modo edición: el giro modifica el color del knob actual
+          int step = 5;
+
+          if (vuRadialCFocusElement == VURADIAL_C_FOCUS_START_KNOB) {
+            vuRadialKnobStartPos += dir * step;
+            if (vuRadialKnobStartPos < 0)   vuRadialKnobStartPos = 0;
+            if (vuRadialKnobStartPos > 211) vuRadialKnobStartPos = 211;
+
+            uint8_t rr, gg, bb;
+            vuRadialColorStart = colorFromSliderEffects((uint8_t)vuRadialKnobStartPos, rr, gg, bb);
+
+            // En la posición 211 forzar blanco puro (cajita y bolita).
+            if (vuRadialKnobStartPos >= 211) {
+              rr = 255;
+              gg = 255;
+              bb = 255;
+              vuRadialColorStart = tft.color565(rr, gg, bb);
+            }
+
+            saveConfigBasic();
+            drawSettingsVuRadialScreen();
+          } else if (vuRadialCFocusElement == VURADIAL_C_FOCUS_END_KNOB) {
+            vuRadialKnobEndPos += dir * step;
+            if (vuRadialKnobEndPos < 0)   vuRadialKnobEndPos = 0;
+            if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
+
+            uint8_t rr2, gg2, bb2;
+            vuRadialColorEnd = colorFromSliderEffects((uint8_t)vuRadialKnobEndPos, rr2, gg2, bb2);
+            if (vuRadialKnobEndPos >= 211) {
+              rr2 = 255;
+              gg2 = 255;
+              bb2 = 255;
+              vuRadialColorEnd = tft.color565(rr2, gg2, bb2);
+            }
+
+            saveConfigBasic();
+            drawSettingsVuRadialScreen();
+          }
+          // Si el foco está en el botón, el giro no hace nada
         }
       }
 
       if (encButtonFalling) {
-        if (vuRadialFocus == VURADIAL_FOCUS_START) {
-          vuRadialFocus = VURADIAL_FOCUS_END;
-          drawSettingsVuRadialScreen();
-        } else {
-          // En el foco final: guardar y pasar a VU RADIAL - A
+        if (vuRadialCFocusElement == VURADIAL_C_FOCUS_NEXT_BUTTON) {
+          // Foco en el botón: ejecutar acción (pasar a VU RADIAL - A)
           saveConfigBasic();
           initVuRadialAudioPositions();
-          // Sincronizar el decoder específico antes de entrar
-          // en VU RADIAL - A.
           resetVuRadialEncoder();
           currentScreen = SCREEN_SETTINGS_VURADIAL_A;
           drawSettingsVuRadialAudioScreen();
+        } else if (!vuRadialCEditing) {
+          // Foco en un knob y modo pendiente: entrar en modo edición
+          vuRadialCEditing = true;
+          drawSettingsVuRadialScreen();
+        } else {
+          // Foco en un knob y modo edición: fijar valor y salir de modo edición
+          vuRadialCEditing = false;
+          drawSettingsVuRadialScreen();
         }
       }
 
       if (btn2Falling) {
+        // Si el efecto está en funcionamiento, finalizarlo y borrar los leds
+        if (vuRadialEffectActive) {
+          stopVuRadialEffect();
+          clearAllLedsAndShow();  // Borrado forzoso de los leds
+        }
+        
         saveConfigBasic();
+
+        // Forzar actualización de la configuración de Luz.
+        if (!lampOn) {
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+        } else if (rainbowMode) {
+          fill_rainbow(leds, NUM_LEDS, rainbowHue, 8);
+        } else {
+          fill_solid(leds, NUM_LEDS, CRGB(redValue, greenValue, blueValue));
+        }
+        FastLED.setBrightness(brightness);
+        FastLED.show();
+        
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
@@ -7147,6 +7947,14 @@ void loop() {
       // El selector Canal necesita cuatro para que cada posición
       // mecánica corresponda a una sola opción.
 
+      // Inicializar foco la primera vez que entramos
+      static bool firstEntry = true;
+      if (firstEntry) {
+        vuRadialAFocus = VURADIAL_A_FOCUS_SENSIBILITY;
+        vuRadialAEditing = false;  // NO entrar en modo edición al principio
+        firstEntry = false;
+      }
+
       int vuStepDir = 0;
 
       if (vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL) {
@@ -7157,23 +7965,28 @@ void loop() {
         vuStepDir = readVuRadialEncoderStep(2);
       }
 
-      if (vuStepDir != 0) {
+      // Giro del encoder en modo edición: modificar valores.
+      if (vuStepDir != 0 && vuRadialAEditing) {
         int dir = (vuStepDir > 0) ? 1 : -1;
         int valueStep = 2;
         bool changed = false;
+
 
         switch (vuRadialAFocus) {
           case VURADIAL_A_FOCUS_SENSIBILITY: {
             int value =
               (int)vuRadialSensitivity + dir * valueStep;
 
+
             if (value < 0) {
               value = 0;
             }
 
+
             if (value > 100) {
               value = 100;
             }
+
 
             if (value != vuRadialSensitivity) {
               vuRadialSensitivity = (uint8_t)value;
@@ -7182,17 +7995,21 @@ void loop() {
             break;
           }
 
+
           case VURADIAL_A_FOCUS_THRESHOLD: {
             int value =
               (int)vuRadialThreshold + dir * valueStep;
+
 
             if (value < 0) {
               value = 0;
             }
 
+
             if (value > 100) {
               value = 100;
             }
+
 
             if (value != vuRadialThreshold) {
               vuRadialThreshold = (uint8_t)value;
@@ -7201,17 +8018,21 @@ void loop() {
             break;
           }
 
+
           case VURADIAL_A_FOCUS_SPEED: {
             int value =
               (int)vuRadialSpeed + dir * valueStep;
+
 
             if (value < 0) {
               value = 0;
             }
 
+
             if (value > 100) {
               value = 100;
             }
+
 
             if (value != vuRadialSpeed) {
               vuRadialSpeed = (uint8_t)value;
@@ -7220,17 +8041,21 @@ void loop() {
             break;
           }
 
+
           case VURADIAL_A_FOCUS_CHANNEL: {
             int value =
               (int)vuRadialChannelMode + dir;
+
 
             if (value < 0) {
               value = 0;
             }
 
+
             if (value > 3) {
               value = 3;
             }
+
 
             if (value != vuRadialChannelMode) {
               vuRadialChannelMode = (uint8_t)value;
@@ -7239,47 +8064,184 @@ void loop() {
             break;
           }
 
-          case VURADIAL_A_FOCUS_BUTTON:
-            // El giro no modifica el botón.
+
+          case VURADIAL_A_FOCUS_LEFT_BUTTON:
+          case VURADIAL_A_FOCUS_RIGHT_BUTTON:
+            // El giro no modifica los botones.
             break;
         }
+
 
         if (changed) {
           redrawVuRadialAudioFocusedControl();
         }
       }
 
-      // Pulsación del encoder: pasar al siguiente foco.
-      if (encButtonFalling) {
+      // Giro del encoder cuando NO se está en modo edición: avanzar/retroceder el foco
+      if (vuStepDir != 0 && !vuRadialAEditing) {
+        int dir = (vuStepDir > 0) ? 1 : -1;
+        
+        // Avanzar/retroceder el foco
+        if (dir > 0) {
+          // Giro a la derecha: avanzar en el ciclo
+          vuRadialAFocus = (VuRadialAFocus)((vuRadialAFocus + 1) % 6);
+        } else {
+          // Giro a la izquierda: retroceder en el ciclo
+          vuRadialAFocus = (VuRadialAFocus)((vuRadialAFocus + 5) % 6);
+        }
+        
+        drawVuRadialAudioControls();
+      }
 
-        // Guardar al pasar de Canal al botón Iniciar.
-        if (vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL) {
-          saveConfigBasic();
+      // Pulsación del encoder: entrar/salir del modo edición o ejecutar acción si estamos en los botones.
+      if (encButtonFalling) {
+        // Si estamos en el botón izquierdo, retroceder a VU RADIAL - C.
+        if (vuRadialAFocus == VURADIAL_A_FOCUS_LEFT_BUTTON) {
+          currentScreen = SCREEN_SETTINGS_VURADIAL;
+          drawSettingsVuRadialScreen();
+          break;  // Salir del case
         }
 
-        vuRadialAFocus =
-          (VuRadialAFocus)(
-            ((int)vuRadialAFocus + 1) % 5
-          );
+        // Si estamos en el botón derecho, lanzar el efecto y pasar a VU RADIAL - F.
+        if (vuRadialAFocus == VURADIAL_A_FOCUS_RIGHT_BUTTON) {
+          vuRadialEffectActive = true;
+          anyEffectActive = true;
+          vuRadialLedPeakL = 0;
+          vuRadialLedPeakR = 0;
+          vuRadialLedPeakLastUpdateMillis = millis();
+          currentScreen = SCREEN_SETTINGS_VURADIAL_F;
+          drawVuRadialFScreen();
+          break;  // Salir del case
+        }
 
-        // Evitar que una transición incompleta del control
-        // anterior afecte al nuevo control.
-        vuRadialEncoderAccum = 0;
-
-        // Sincronizar el estado lógico del decoder con el estado
-        // eléctrico actual del encoder.
-        vuRadialEncoderState =
-          ((digitalRead(ENCODER_A) ? 1 : 0) << 1) |
-           (digitalRead(ENCODER_B) ? 1 : 0);
-
-        drawVuRadialAudioControls();
+        // Si estamos en un knob o canal y no estamos en modo edición, entrar en modo edición.
+        if (!vuRadialAEditing) {
+          vuRadialAEditing = true;
+          redrawVuRadialAudioFocusedControl();
+        } else {
+          // Si estamos en modo edición, salir del modo edición (sin avanzar al siguiente foco).
+          vuRadialAEditing = false;
+          
+          // Guardar al pasar de Canal.
+          if (vuRadialAFocus == VURADIAL_A_FOCUS_CHANNEL) {
+            saveConfigBasic();
+          }
+          
+          // Redibujar el control actual (el knob pasa de blanco a azul).
+          redrawVuRadialAudioFocusedControl();
+        }
       }
 
       // Botón 2: volver al menú de efectos.
       if (btn2Falling) {
+        // Si el efecto está en funcionamiento, finalizarlo y borrar los leds
+        if (vuRadialEffectActive) {
+          stopVuRadialEffect();
+          clearAllLedsAndShow();  // Borrado forzoso de los leds
+        }
+
+        saveConfigBasic();
+        
+        // Forzar actualización de la configuración de Luz.
+        if (!lampOn) {
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+        } else if (rainbowMode) {
+          fill_rainbow(leds, NUM_LEDS, rainbowHue, 8);
+        } else {
+          fill_solid(leds, NUM_LEDS, CRGB(redValue, greenValue, blueValue));
+        }
+        FastLED.setBrightness(brightness);
+        FastLED.show();
+
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
+
+      break;
+    }
+
+    case SCREEN_SETTINGS_VURADIAL_F: {
+      // Pantalla VU RADIAL - F (sólo VU Meter, sin FFT)
+      // El VU meter se actualiza en el bloque general de audio
+
+      // Inicializar foco la primera vez que entramos
+      static bool firstEntry = true;
+      if (firstEntry) {
+        vuRadialFFocus = VURADIAL_F_FOCUS_LEFT_BUTTON;
+        firstEntry = false;
+      }
+
+      drawVuRadialAudioMeter();
+
+      // Botón con flecha izquierda (retrocede a VU RADIAL - A)
+      // Dibujar sólo si es la primera vez o si cambia el foco
+      static bool buttonDrawn = false;
+      static bool lastFocused = false;
+      
+      bool focusedButton = (vuRadialFFocus == VURADIAL_F_FOCUS_LEFT_BUTTON);
+      
+      if (!buttonDrawn || lastFocused != focusedButton) {
+        buttonDrawn = true;
+        lastFocused = focusedButton;
+        
+        int btnW = 60;
+        int btnH = 24;
+        int btnY = 210;
+        int btnX = (240 - btnW) / 2;
+        
+        uint16_t btnFill = focusedButton ? TFT_WHITE : TFT_DARKGREY;
+        uint16_t arrowColor = focusedButton ? TFT_BLACK : TFT_WHITE;
+        
+        tft.fillRect(btnX, btnY, btnW, btnH, btnFill);
+        
+        if (focusedButton) {
+          tft.drawRoundRect(btnX - 3, btnY - 3, btnW + 6, btnH + 6, 4, TFT_YELLOW);
+          tft.drawRoundRect(btnX - 2, btnY - 2, btnW + 4, btnH + 4, 4, TFT_YELLOW);
+          tft.drawRoundRect(btnX - 1, btnY - 1, btnW + 2, btnH + 2, 4, TFT_BLUE);
+          tft.drawRoundRect(btnX,     btnY,     btnW,     btnH,     4, TFT_BLUE);
+          tft.drawRoundRect(btnX + 1, btnY + 1, btnW - 2, btnH - 2, 4, TFT_YELLOW);
+          tft.drawRoundRect(btnX + 2, btnY + 2, btnW - 4, btnH - 4, 4, TFT_YELLOW);
+        } else {
+          tft.drawRoundRect(btnX, btnY, btnW, btnH, 4, TFT_WHITE);
+        }
+        
+        drawLeftArrowButton(btnX, btnY, btnW, btnH, arrowColor);
+      }
+
+      // Pulsación del encoder: retroceder a VU RADIAL - A
+      if (encButtonFalling) {
+        if (vuRadialFFocus == VURADIAL_F_FOCUS_LEFT_BUTTON) {
+          currentScreen = SCREEN_SETTINGS_VURADIAL_A;
+          drawSettingsVuRadialAudioScreen();
+          break;
+        }
+      }
+
+
+      // Botón 2: volver al menú de efectos
+      if (btn2Falling) {
+        if (vuRadialEffectActive) {
+          stopVuRadialEffect();
+          clearAllLedsAndShow();
+        }
+        
+        saveConfigBasic();
+        
+        if (!lampOn) {
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+        } else if (rainbowMode) {
+          fill_rainbow(leds, NUM_LEDS, rainbowHue, 8);
+        } else {
+          fill_solid(leds, NUM_LEDS, CRGB(redValue, greenValue, blueValue));
+        }
+        FastLED.setBrightness(brightness);
+        FastLED.show();
+
+
+        currentScreen = SCREEN_SETTINGS_EFFECTS;
+        drawSettingsEffectsScreen();
+      }
+
 
       break;
     }
@@ -7597,9 +8559,6 @@ void loop() {
     updateAudioLevels();
     drawVuRadialAudioMeter();
   }
-  
-  lastSw   = sw;
-  lastBtn2 = btn2;
 
   if (lampOn && rainbowMode) {
     rainbowHue++;
@@ -7619,6 +8578,8 @@ void loop() {
       updatePersianaEffect();
     } else if (relojEffectActive) {
       updateRelojEffect();
+    } else if (vuRadialEffectActive) {
+      updateVuRadialEffect();
     }
     // futuros efectos: else if (otroEffectActive) update...
   }
