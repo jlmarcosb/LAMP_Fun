@@ -1,7 +1,7 @@
-// LAMP_Fun V.2.8.1
-// José Luís Marcos Bezos - Junio 2026.
+// LAMP_Fun V.4.0.0
+// José Luís Marcos Bezos - Agosto 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
-// pulsador extra + WS2812B + INMP441 + MAX98357A
+// pulsador extra + WS2812B + INMP441
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -21,7 +21,7 @@
 // ranura derecha    -> micrófono con L/R conectado a 3V3
 
 // Frecuencia de muestreo
-#define I2S_SAMPLE_RATE 16000
+#define I2S_SAMPLE_RATE 22050
 
 // Número de frames estéreo leídos en cada bloque
 #define I2S_BUFFER_LEN 64
@@ -37,6 +37,51 @@ bool initI2SAudio();
 void readAudioSamples(int32_t &sampleL, int32_t &sampleR);
 int16_t audioSampleToDbLevel(int32_t sample);
 void updateAudioLevels();
+
+// ============================================================================
+// FFT - Analizador de frecuencias (16 bandas, 512 muestras)
+// ============================================================================
+
+#define FFT_SAMPLES 512
+#define FFT_BANDS 16
+#define FFT_SAMPLING_FREQ 22050.0f  // Hz
+
+// Buffers para FFT (interleaved L+R)
+float fftBufferL[FFT_SAMPLES];
+float fftBufferR[FFT_SAMPLES];
+int fftBufferIndex = 0;
+bool fftBufferReady = false;
+
+// Arrays para arduinoFFT
+float vRealL[FFT_SAMPLES];
+float vImagL[FFT_SAMPLES];
+float vRealR[FFT_SAMPLES];
+float vImagR[FFT_SAMPLES];
+
+// Bandas resultantes (0..1, misma escala visual que el VU Meter)
+float fftBandsL[FFT_BANDS];
+float fftBandsR[FFT_BANDS];
+
+// Suavizado de bandas (0..1)
+float fftSmoothL[FFT_BANDS];
+float fftSmoothR[FFT_BANDS];
+float fftDecayL[FFT_BANDS];
+float fftDecayR[FFT_BANDS];
+
+// Alturas anteriores de las barras (para dibujo incremental)
+int prevBarHeightL[FFT_BANDS];
+int prevBarHeightR[FFT_BANDS];
+
+// Sprite para el degradado de las barras del analizador.
+TFT_eSprite* analyzerBarSprite = nullptr;
+
+// Instancias de FFT
+ArduinoFFT fftL = ArduinoFFT(vRealL, vImagL, FFT_SAMPLES, FFT_SAMPLING_FREQ);
+ArduinoFFT fftR = ArduinoFFT(vRealR, vImagR, FFT_SAMPLES, FFT_SAMPLING_FREQ);
+
+// Última actualización de FFT
+unsigned long lastFFTUpdateMillis = 0;
+#define FFT_UPDATE_INTERVAL 25  // ms entre actualizaciones de FFT
 
 // ----------------- Estado de audio para VU RADIAL - A -----------------
 
@@ -111,8 +156,6 @@ bool initI2SAudio() {
   );
 
   if (!ok) {
-    Serial.println("AUDIO: error al iniciar I2S moderno");
-    Serial.flush();
     return false;
   }
 
@@ -126,15 +169,6 @@ bool initI2SAudio() {
 // las 24 bits útiles del INMP441.
 // TAMBIÉN acumula muestras para FFT si fftAccumReady es false.
 void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
-
-  // DEBUG: Verificar si se llama a esta función
-  static unsigned long lastDebug = 0;
-  if (millis() - lastDebug > 1000) {
-    lastDebug = millis();
-    Serial.print("readAudioSamples llamada. i2sAudioInitialized: ");
-    Serial.println(i2sAudioInitialized ? "YES" : "NO");
-  }
-
 
   sampleL = 0;
   sampleR = 0;
@@ -161,17 +195,6 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
   int totalWords = bytesRead / sizeof(int32_t);
   int frameCount = totalWords / 2;
 
-    
-  // DEBUG: Verificar frameCount
-  static unsigned long lastDebug2 = 0;
-  if (millis() - lastDebug2 > 1000) {
-    lastDebug2 = millis();
-    Serial.print("readAudioSamples: bytesRead="); Serial.print(bytesRead);
-    Serial.print(" totalWords="); Serial.print(totalWords);
-    Serial.print(" frameCount="); Serial.println(frameCount);
-  }
-  
-
   if (frameCount <= 0) {
     return;
   }
@@ -196,16 +219,15 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
     sumSqL += (int64_t)valueL * (int64_t)valueL;
     sumSqR += (int64_t)valueR * (int64_t)valueR;
 
-    // Guardar muestra cruda para FFT (buffer circular)
-    if (fftBufferIndex < FFT_SAMPLES) {
-      fftBufferL[fftBufferIndex] = (float)valueL;
-      fftBufferR[fftBufferIndex] = (float)valueR;
-      fftBufferIndex++;
-      
-      if (fftBufferIndex >= FFT_SAMPLES) {
-        fftBufferReady = true;
-        fftBufferIndex = 0;
-      }
+    // Guardar muestra cruda para FFT (buffer circular continuo).
+    // Se escribe siempre, sin esperar a que calculateFFT() procese el buffer.
+    fftBufferL[fftBufferIndex] = (float)valueL;
+    fftBufferR[fftBufferIndex] = (float)valueR;
+    fftBufferIndex++;
+    
+    if (fftBufferIndex >= FFT_SAMPLES) {
+      fftBufferReady = true;
+      fftBufferIndex = 0;  // Empezar a llenar el siguiente buffer inmediatamente
     }
     
   }
@@ -243,6 +265,77 @@ void readAudioSamples(int32_t &sampleL, int32_t &sampleR) {
   sampleL = (int32_t)rmsL;
   sampleR = (int32_t)rmsR;
 
+}
+
+// Calcular FFT y obtener las 16 bandas para L y R.
+// La ventana Hann se aplica una sola vez con arduinoFFT.
+void computeFFT() {
+  // Normalización provisional de las muestras de 24 bits del INMP441.
+  const float normalization = 400000.0f;
+
+  // Copiar y normalizar las muestras al formato de entrada de arduinoFFT.
+  for (int i = 0; i < FFT_SAMPLES; i++) {
+    vRealL[i] = fftBufferL[i] / normalization;
+    vImagL[i] = 0.0f;
+
+    vRealR[i] = fftBufferR[i] / normalization;
+    vImagR[i] = 0.0f;
+  }
+
+  // Aplicar Hann UNA sola vez.
+  fftL.windowing(FFT_WIN_TYP_HANN, FFT_FORWARD, false);
+  fftR.windowing(FFT_WIN_TYP_HANN, FFT_FORWARD, false);
+
+  // Calcular FFT.
+  fftL.compute(FFT_FORWARD);
+  fftR.compute(FFT_FORWARD);
+
+  // Convertir números complejos en magnitudes.
+  fftL.complexToMagnitude();
+  fftR.complexToMagnitude();
+
+  // Agrupar bins de frecuencia en 16 bandas.
+  // Se ignoran los bins 0 y 1 para reducir la influencia de DC.
+  for (int band = 0; band < FFT_BANDS; band++) {
+    int startBin = 2 + band * 16;
+    int endBin = startBin + 15;
+
+    if (endBin > FFT_SAMPLES / 2) {
+      endBin = FFT_SAMPLES / 2;
+    }
+
+    float sumL = 0.0f;
+    float sumR = 0.0f;
+    int count = 0;
+
+    for (int bin = startBin; bin < endBin; bin++) {
+      sumL += vRealL[bin];
+      sumR += vRealR[bin];
+      count++;
+    }
+
+    if (count > 0) {
+      float averageL = sumL / count;
+      float averageR = sumR / count;
+
+      // Escalado temporal 0..255. Lo sustituiremos por una escala
+      // vinculada a los niveles visuales del VU Meter antes de dibujar.
+      fftBandsL[band] = (uint8_t)constrain(
+        averageL * 255.0f,
+        0.0f,
+        255.0f
+      );
+
+      fftBandsR[band] = (uint8_t)constrain(
+        averageR * 255.0f,
+        0.0f,
+        255.0f
+      );
+    }
+  }
+
+  // El bloque se ha procesado y puede empezar a acumularse el siguiente.
+  fftBufferReady = false;
 }
 
 // Convertir una muestra de audio a nivel "dB" 0..100
@@ -300,8 +393,48 @@ int16_t audioSampleToDbLevel(int32_t sample) {
   return result;
 }
 
-// Actualizar niveles de audio L/R (llamar periódicamente)
+// Convierte un nivel de audio "crudo" (0..100, como audioLevelDb) a una escala visual 0..1
+// usando la misma sensibilidad y umbral que el VU Meter.
+//
+// levelDb: nivel ya calculado por updateAudioLevels() (0..100).
+// sensitivity: vuRadialSensitivity (0..100).
+// threshold: vuRadialThreshold (0..100).
+float mapAudioLevelToVisual(float levelDb, uint8_t sensitivity, uint8_t threshold) {
+  // Aplicar umbral: si está por debajo, nivel visual = 0.
+  if (levelDb <= threshold) {
+    return 0.0f;
+  }
 
+  // Restar umbral para que el rango efectivo sea [threshold..100] -> [0..100-threshold].
+  float effectiveLevel = levelDb - threshold;
+  float effectiveRange = 100.0f - threshold;
+  if (effectiveRange <= 0.0f) effectiveRange = 1.0f;
+
+  // Normalizar a 0..1 sin sensibilidad.
+  float normalized = effectiveLevel / effectiveRange;
+  if (normalized < 0.0f) normalized = 0.0f;
+  if (normalized > 1.0f) normalized = 1.0f;
+
+  // Aplicar ganancia de sensibilidad.
+  // 0..50: ganancia 0..1 (atenuación).
+  // 50..100: ganancia 1..Gmax (amplificación).
+  float gain = 1.0f;
+  if (sensitivity <= 50) {
+    gain = sensitivity / 50.0f;          // 0..1
+  } else {
+    const float GMAX = 4.0f;             // misma idea que en updateAudioLevels()
+    float upper = (sensitivity - 50) / 50.0f;
+    gain = 1.0f + upper * (GMAX - 1.0f); // 1..GMAX
+  }
+
+  float visual = normalized * gain;
+  if (visual < 0.0f) visual = 0.0f;
+  if (visual > 1.0f) visual = 1.0f;      // recorte visual (como en VU)
+
+  return visual;
+}
+
+// Actualizar niveles de audio L/R (llamar periódicamente)
 void updateAudioLevels() {
   // Leer muestras físicas de los dos micrófonos.
   readAudioSamples(audioLastSampleL, audioLastSampleR);
@@ -533,97 +666,184 @@ void updateAudioLevels() {
 }
 
 // ============================================================================
-// FFT - Calcular analizador de frecuencias
+// FFT - Calcular analizador de frecuencias (versión simplificada y estable)
 // ============================================================================
+
+// ============================================================================
+// FFT - Calcular analizador de frecuencias (versión simplificada y estable)
+// ============================================================================
+
 
 void calculateFFT() {
   // Solo calcular si hay buffer lleno y ha pasado el intervalo
   if (!fftBufferReady || (millis() - lastFFTUpdateMillis) < FFT_UPDATE_INTERVAL) {
     return;
   }
-  
-  // Resetear flag
+
+  // Resetear flag y actualizar tiempo
   fftBufferReady = false;
   lastFFTUpdateMillis = millis();
-  
-  // Calcular nivel de referencia (RMS de VU)
-  float referenceLevel = max(audioLevelDbL, audioLevelDbR);
-  
-  // Aplicar umbral de silencio
-  if (referenceLevel < vuRadialThreshold) {
-    // Silencio: todas las bandas a 0
+
+  // Si el VU está en silencio (ambos canales por debajo del umbral),
+  // poner todas las bandas a 0 directamente.
+  if (audioLevelDbL < vuRadialThreshold && audioLevelDbR < vuRadialThreshold) {
     for (int i = 0; i < FFT_BANDS; i++) {
-      fftBandsL[i] = 0;
-      fftBandsR[i] = 0;
-      fftSmoothL[i] = 0;
-      fftSmoothR[i] = 0;
+      fftBandsL[i] = 0.0f;
+      fftBandsR[i] = 0.0f;
+      fftSmoothL[i] = 0.0f;
+      fftSmoothR[i] = 0.0f;
     }
     return;
   }
-  
-  // Copiar muestras a arrays de FFT
+
+  // Copiar muestras a arrays de FFT y normalizar a ±1.0 aprox.
+  const float normalization = 400000.0f;
   for (int i = 0; i < FFT_SAMPLES; i++) {
-    vRealL[i] = fftBufferL[i];
-    vImagL[i] = 0;
-    vRealR[i] = fftBufferR[i];
-    vImagR[i] = 0;
+    vRealL[i] = fftBufferL[i] / normalization;
+    vImagL[i] = 0.0f;
+
+
+    vRealR[i] = fftBufferR[i] / normalization;
+    vImagR[i] = 0.0f;
   }
-  
-  // Aplicar ventana de Hamming
-  fftL.WindowFunction(FFT_WIN_TYP_HAMMING);
-  fftR.WindowFunction(FFT_WIN_TYP_HAMMING);
-  
+
+  // Aplicar ventana de Hann (una sola vez).
+  fftL.windowing(FFT_WIN_TYP_HANN, FFT_FORWARD, false);
+  fftR.windowing(FFT_WIN_TYP_HANN, FFT_FORWARD, false);
+
   // Calcular FFT
-  fftL.Compute(FFT_FORWARD);
-  fftR.Compute(FFT_FORWARD);
-  
-  // Calcular magnitud de bandas
+  fftL.compute(FFT_FORWARD);
+  fftR.compute(FFT_FORWARD);
+
+  // Calcular magnitud
+  fftL.complexToMagnitude();
+  fftR.complexToMagnitude();
+
+  // ------------------------------------------------------------------------
+  // 1) Obtener magnitud por banda (bins agrupados).
+  // ------------------------------------------------------------------------
+  float bandMagL[FFT_BANDS];
+  float bandMagR[FFT_BANDS];
+
   for (int band = 0; band < FFT_BANDS; band++) {
-    // Calcular índice de frecuencia para esta banda
-    int startBin = (band * FFT_SAMPLES) / (FFT_BANDS * 2);
-    int endBin = ((band + 1) * FFT_SAMPLES) / (FFT_BANDS * 2);
-    
-    float sumL = 0;
-    float sumR = 0;
-    
-    // Sumar magnitudes en el rango de bins
+    int startBin = 2 + band * 8;
+    int endBin = startBin + 7;
+
+    if (startBin >= FFT_SAMPLES / 2) {
+      startBin = FFT_SAMPLES / 2 - 1;
+      endBin = startBin + 1;
+    }
+    if (endBin > FFT_SAMPLES / 2) {
+      endBin = FFT_SAMPLES / 2;
+    }
+
+    float sumL = 0.0f;
+    float sumR = 0.0f;
+    int count = 0;
+
     for (int bin = startBin; bin < endBin; bin++) {
-      sumL += sqrt(sq(vRealL[bin]) + sq(vImagL[bin]));
-      sumR += sqrt(sq(vRealR[bin]) + sq(vImagR[bin]));
+      sumL += vRealL[bin];
+      sumR += vRealR[bin];
+      count++;
     }
-    
-    // Promediar
-    float avgL = sumL / (endBin - startBin);
-    float avgR = sumR / (endBin - startBin);
-    
-    // Normalizar respecto al nivel de referencia (RMS de VU)
-    float normalizedL = avgL / (referenceLevel + 1e-6);
-    float normalizedR = avgR / (referenceLevel + 1e-6);
-    
-    // Aplicar sensibilidad
-    float scaledL = normalizedL * (vuRadialSensitivity / 100.0);
-    float scaledR = normalizedR * (vuRadialSensitivity / 100.0);
-    
-    // Limitar a 0-255
-    fftBandsL[band] = constrain((int)(scaledL * 255), 0, 255);
-    fftBandsR[band] = constrain((int)(scaledR * 255), 0, 255);
+
+    if (count > 0) {
+      bandMagL[band] = sumL / count;
+      bandMagR[band] = sumR / count;
+    } else {
+      bandMagL[band] = 0.0f;
+      bandMagR[band] = 0.0f;
+    }
   }
-  
-  // Aplicar suavizado (attack rápido, decay lento)
+
+  // ------------------------------------------------------------------------
+  // 1.5) Mezclar primera banda con la segunda: 20% banda 0 + 80% banda 1.
+  // Esto suaviza los graves extremos manteniendo la representación de frecuencia.
+  // ------------------------------------------------------------------------
+  bandMagL[0] = bandMagL[0] * 0.2f + bandMagL[1] * 0.8f;
+  bandMagR[0] = bandMagR[0] * 0.2f + bandMagR[1] * 0.8f;
+
+  // ------------------------------------------------------------------------
+  // 2) Normalizar bandas respecto al máximo espectral (0..1).
+  // ------------------------------------------------------------------------
+  float maxMag = 0.0f;
+  for (int band = 0; band < FFT_BANDS; band++) {
+    if (bandMagL[band] > maxMag) maxMag = bandMagL[band];
+    if (bandMagR[band] > maxMag) maxMag = bandMagR[band];
+  }
+
+  if (maxMag < 1e-6f) {
+    for (int i = 0; i < FFT_BANDS; i++) {
+      fftBandsL[i] = 0.0f;
+      fftBandsR[i] = 0.0f;
+      fftSmoothL[i] = 0.0f;
+      fftSmoothR[i] = 0.0f;
+    }
+    return;
+  }
+
+  float normL[FFT_BANDS];
+  float normR[FFT_BANDS];
+
+  for (int band = 0; band < FFT_BANDS; band++) {
+    normL[band] = bandMagL[band] / maxMag;
+    normR[band] = bandMagR[band] / maxMag;
+
+    if (normL[band] < 0.0f) normL[band] = 0.0f;
+    if (normL[band] > 1.0f) normL[band] = 1.0f;
+
+    if (normR[band] < 0.0f) normR[band] = 0.0f;
+    if (normR[band] > 1.0f) normR[band] = 1.0f;
+  }
+
+  // ------------------------------------------------------------------------
+  // 3) Escalar bandas usando el nivel del VU como referencia global.
+  //    audioLevelDbL/R ya están en 0..100.
+  //    Multiplicamos normL/R por ese nivel para que las bandas sigan
+  //    la misma "ganancia" que el VU.
+  // ------------------------------------------------------------------------
+  for (int band = 0; band < FFT_BANDS; band++) {
+    float levelL = normL[band] * audioLevelDbL;
+    float levelR = normR[band] * audioLevelDbR;
+
+    if (levelL < 0.0f) levelL = 0.0f;
+    if (levelL > 100.0f) levelL = 100.0f;
+
+    if (levelR < 0.0f) levelR = 0.0f;
+    if (levelR > 100.0f) levelR = 100.0f;
+
+    // Aplicar la misma función de escala visual que para el VU.
+    fftBandsL[band] = mapAudioLevelToVisual(levelL, vuRadialSensitivity, vuRadialThreshold);
+    fftBandsR[band] = mapAudioLevelToVisual(levelR, vuRadialSensitivity, vuRadialThreshold);
+  }
+
+  // ------------------------------------------------------------------------
+  // 4) Suavizado (attack rápido, decay más rápido para respuesta ágil).
+  // ------------------------------------------------------------------------
   for (int i = 0; i < FFT_BANDS; i++) {
-    // Attack: subir rápido
+    // Canal L
     if (fftBandsL[i] > fftSmoothL[i]) {
-      fftSmoothL[i] = fftSmoothL[i] * 0.7 + fftBandsL[i] * 0.3;
+      // Attack: subir muy rápido (0.05/0.95)
+      fftSmoothL[i] = fftSmoothL[i] * 0.05f + fftBandsL[i] * 0.95f;
     } else {
-      // Decay: bajar lento
-      fftSmoothL[i] = fftSmoothL[i] * 0.95 + fftBandsL[i] * 0.05;
+      // Decay: bajar muy rápido (0.4/0.6)
+      fftSmoothL[i] = fftSmoothL[i] * 0.4f + fftBandsL[i] * 0.6f;
     }
-    
+
+    // Canal R
     if (fftBandsR[i] > fftSmoothR[i]) {
-      fftSmoothR[i] = fftSmoothR[i] * 0.7 + fftBandsR[i] * 0.3;
+      fftSmoothR[i] = fftSmoothR[i] * 0.05f + fftBandsR[i] * 0.95f;
     } else {
-      fftSmoothR[i] = fftSmoothR[i] * 0.95 + fftBandsR[i] * 0.05;
+      fftSmoothR[i] = fftSmoothR[i] * 0.4f + fftBandsR[i] * 0.6f;
     }
+
+    // Recortar
+    if (fftSmoothL[i] < 0.0f) fftSmoothL[i] = 0.0f;
+    if (fftSmoothL[i] > 1.0f) fftSmoothL[i] = 1.0f;
+
+
+    if (fftSmoothR[i] < 0.0f) fftSmoothR[i] = 0.0f;
+    if (fftSmoothR[i] > 1.0f) fftSmoothR[i] = 1.0f;
   }
 }
 
@@ -694,8 +914,6 @@ uint8_t redValue     = 50;
 uint8_t greenValue   = 50;
 uint8_t blueValue    = 50;
 uint8_t rainbowHue   = 0;
-
-
 
 // ----------------- Efectos (infraestructura común) -----------------
 
@@ -1005,10 +1223,8 @@ void initVuRadialSliderPositions() {
   vuRadialKnobStartPos = sliderPosFromColorEffects(vuRadialColorStart);
   vuRadialKnobEndPos   = sliderPosFromColorEffects(vuRadialColorEnd);
 
-
   if (vuRadialKnobStartPos < 0)   vuRadialKnobStartPos = 0;
   if (vuRadialKnobStartPos > 211) vuRadialKnobStartPos = 211;
-
 
   if (vuRadialKnobEndPos < 0)   vuRadialKnobEndPos = 0;
   if (vuRadialKnobEndPos > 211) vuRadialKnobEndPos = 211;
@@ -1041,42 +1257,50 @@ uint8_t vuRadialSpeed = 50;       // 0..100
 uint8_t vuRadialChannelMode = 3;  // 0=L, 1=R, 2=L+R, 3=Estéreo
 
 // ============================================================================
-// FFT - Analizador de frecuencias (16 bandas, 512 muestras)
+// Analizadores de frecuencia (VU RADIAL - F)
 // ============================================================================
 
-#define FFT_SAMPLES 512
-#define FFT_BANDS 16
-#define FFT_SAMPLING_FREQ 16000  // Hz
+// Posición y tamaño del recuadro contenedor (coherente con drawVuRadialFScreen).
+#define ANALYZER_FRAME_X 5
+#define ANALYZER_FRAME_Y (VURADIAL_AUDIO_BAR_Y_R + VURADIAL_AUDIO_BAR_H + 5)
+#define ANALYZER_FRAME_W (240 - 10)
+#define ANALYZER_FRAME_H (VURADIAL_AUDIO_BUTTON_Y - 8 - ANALYZER_FRAME_Y)
 
-// Buffers para FFT (interleaved L+R)
-float fftBufferL[FFT_SAMPLES];
-float fftBufferR[FFT_SAMPLES];
-int fftBufferIndex = 0;
-bool fftBufferReady = false;
+// Ejes de frecuencia.
+#define ANALYZER_AXIS_X (ANALYZER_FRAME_X + 18)
+#define ANALYZER_AXIS_W 208
 
-// Arrays para arduinoFFT
-float vRealL[FFT_SAMPLES];
-float vImagL[FFT_SAMPLES];
-float vRealR[FFT_SAMPLES];
-float vImagR[FFT_SAMPLES];
+// Eje inferior (R) y superior (L).
+#define ANALYZER_AXIS_Y2 (ANALYZER_FRAME_Y + ANALYZER_FRAME_H - 5)
+#define ANALYZER_AXIS_Y1 ((ANALYZER_AXIS_Y2 + ANALYZER_FRAME_Y) / 2)
 
-// Bandas resultantes (0-255)
-uint8_t fftBandsL[FFT_BANDS];
-uint8_t fftBandsR[FFT_BANDS];
+// Altura máxima de barra y zona de refresco.
+#define ANALYZER_BAR_MAX_HEIGHT 54
+#define ANALYZER_BAR_START_OFFSET 1  // 1px por encima del eje
 
-// Suavizado de bandas
-float fftSmoothL[FFT_BANDS];
-float fftSmoothR[FFT_BANDS];
-float fftDecayL[FFT_BANDS];
-float fftDecayR[FFT_BANDS];
+// Zonas de refresco (rectángulos completos que incluyen margen).
+#define ANALYZER_L_X ANALYZER_AXIS_X
+#define ANALYZER_L_Y (ANALYZER_AXIS_Y1 - ANALYZER_BAR_MAX_HEIGHT - ANALYZER_BAR_START_OFFSET)
+#define ANALYZER_L_W ANALYZER_AXIS_W
+#define ANALYZER_L_H (ANALYZER_BAR_MAX_HEIGHT + ANALYZER_BAR_START_OFFSET)
 
-// Instancias de FFT
-FFT fftL = FFT(vRealL, vImagL, FFT_SAMPLES);
-FFT fftR = FFT(vRealR, vImagR, FFT_SAMPLES);
+#define ANALYZER_R_X ANALYZER_AXIS_X
+#define ANALYZER_R_Y (ANALYZER_AXIS_Y2 - ANALYZER_BAR_MAX_HEIGHT - ANALYZER_BAR_START_OFFSET)
+#define ANALYZER_R_W ANALYZER_AXIS_W
+#define ANALYZER_R_H (ANALYZER_BAR_MAX_HEIGHT + ANALYZER_BAR_START_OFFSET)
 
-// Última actualización de FFT
-unsigned long lastFFTUpdateMillis = 0;
-#define FFT_UPDATE_INTERVAL 25  // ms entre actualizaciones de FFT
+// Barras: 16 bandas, 12px ancho + 1px separación = 13px totales.
+#define ANALYZER_NUM_BANDS 16
+#define ANALYZER_BAR_WIDTH 12
+#define ANALYZER_BAR_SPACING 1
+#define ANALYZER_BAND_STEP (ANALYZER_BAR_WIDTH + ANALYZER_BAR_SPACING)
+
+// Colores del degradado (RGB).
+#define ANALYZER_COLOR_WHITE   255, 255, 255
+#define ANALYZER_COLOR_YELLOW  255, 255,   0
+#define ANALYZER_COLOR_RED_LT  255, 100, 100
+#define ANALYZER_COLOR_RED_DK  180,   0,   0
+#define ANALYZER_COLOR_PEAK      0,   0, 255
 
 void initVuRadialAudioPositions() {
   if (vuRadialSensitivity > 100) vuRadialSensitivity = 100;
@@ -3084,7 +3308,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.2.8.1", 120, 85);
+  tft.drawString("V.4.0.0", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -5587,30 +5811,24 @@ void drawLeftArrowButton(int btnX, int btnY, int btnW, int btnH, uint16_t arrowC
   int cx = btnX + btnW / 2;
   int cy = btnY + btnH / 2;
 
-
   // Tamaño de la flecha
   int arrowW = 20; // anchura del triángulo
   int arrowH = 14; // altura del triángulo
   int tailW = 20;  // longitud de la cola
   int tailH = 6;   // grosor de la cola
 
-
   // Anchura total de la flecha (triángulo + cola)
   int totalW = arrowW + tailW;
 
-
   // Posición X del centro de la flecha completa
   int arrowCenterX = cx;
-
 
   // Base del triángulo: ahora el triángulo está a la izquierda
   int baseX = arrowCenterX + (arrowW - tailW) / 2;
   int tipX  = baseX - arrowW;
 
-
   int topY    = cy - arrowH / 2;
   int bottomY = cy + arrowH / 2;
-
 
   // Relleno de la flecha (triángulo)
   tft.fillTriangle(
@@ -5620,10 +5838,8 @@ void drawLeftArrowButton(int btnX, int btnY, int btnW, int btnH, uint16_t arrowC
     arrowColor
   );
 
-
   // Cola de la flecha
   int tailY = cy - tailH / 2;
-
 
   // La cola va desde baseX hasta (baseX + tailW)
   tft.fillRect(
@@ -5845,7 +6061,6 @@ const int VURADIAL_AUDIO_BAR_GAP = 2;
 // a la altura de la fuente de texto tamaño 2.
 const int VURADIAL_AUDIO_BAR_H = 16;
 
-
 // Primera línea del VU meter: canal L.
 const int VURADIAL_AUDIO_BAR_Y_L = 42;
 
@@ -5856,7 +6071,6 @@ const int VURADIAL_AUDIO_BAR_Y_R =
   VURADIAL_AUDIO_BAR_H +
   4;
 
-
 // Texto dB centrado verticalmente entre las dos líneas.
 const int VURADIAL_AUDIO_DB_X = 216;
 const int VURADIAL_AUDIO_DB_Y =
@@ -5864,12 +6078,10 @@ const int VURADIAL_AUDIO_DB_Y =
    VURADIAL_AUDIO_BAR_Y_R +
    VURADIAL_AUDIO_BAR_H) / 2;
 
-
 // Número de barras que caben en la anchura disponible.
 const int VURADIAL_AUDIO_BAR_COUNT =
   (VURADIAL_AUDIO_METER_W + VURADIAL_AUDIO_BAR_GAP) /
   (VURADIAL_AUDIO_BAR_W + VURADIAL_AUDIO_BAR_GAP);
-
 
 // Obtener el color de una barra según su posición.
 //
@@ -5939,7 +6151,6 @@ void drawVuRadialAudioBar(
     peakLevel = 100;
   }
 
-
   // Anchura estrictamente ocupada por las barras y sus separaciones.
   int meterWidth =
     VURADIAL_AUDIO_BAR_COUNT * VURADIAL_AUDIO_BAR_W;
@@ -5949,7 +6160,6 @@ void drawVuRadialAudioBar(
       (VURADIAL_AUDIO_BAR_COUNT - 1) *
       VURADIAL_AUDIO_BAR_GAP;
   }
-
 
   // Número de barras encendidas según el nivel actual.
   int activeBars =
@@ -5966,7 +6176,6 @@ void drawVuRadialAudioBar(
       peakBar = VURADIAL_AUDIO_BAR_COUNT - 1;
     }
   }
-
 
   // Redibujar exclusivamente el rectángulo ocupado
   // por las barras de esta línea.
@@ -6541,16 +6750,144 @@ void drawSettingsVuRadialAudioScreen() {
   drawVuRadialAudioControls();
 }
 
-// Dibujar analizadores de frecuencia (2 filas horizontales, 16 bandas).
-// TODO: Implementar cuando se proporcionen coordenadas exactas.
+// ============================================================================
+// Analizadores de frecuencia - Dibujo (2 filas horizontales, 16 bandas)
+// ============================================================================
+// Dibuja una sola barra de analizador con degradado y pico azul.
+//
+// x, y: esquina superior izquierda de la barra (en coordenadas de pantalla).
+// height: altura en píxeles (0..ANALYZER_BAR_MAX_HEIGHT).
+// peakPos: posición del pico azul dentro de la barra (0..height-1), contando desde abajo.
+//          Si peakPos >= height, no se dibuja pico.
+static void drawAnalyzerBar(int x, int y, int height, int peakPos) {
+  // Limitar altura máxima.
+  if (height > ANALYZER_BAR_MAX_HEIGHT) {
+    height = ANALYZER_BAR_MAX_HEIGHT;
+  }
+  if (height < 0) {
+    height = 0;
+  }
+
+  // Coordenadas verticales de la barra.
+  // baseY: primer píxel de la barra (parte superior visual).
+  // topY: último píxel de la barra (parte inferior, junto al eje).
+  int baseY = y + (ANALYZER_BAR_MAX_HEIGHT - height);
+  int topY = y + ANALYZER_BAR_MAX_HEIGHT - 1;
+
+  // 1) Dibujar la parte "no usada" en negro (desde y hasta baseY-1).
+  // Esto evita residuos de frames anteriores sin necesidad de borrar toda la zona.
+  if (baseY > y) {
+    tft.fillRect(x, y, ANALYZER_BAR_WIDTH, baseY - y, TFT_BLACK);
+  }
+
+  // 2) Dibujar la barra propiamente dicha (de topY hacia arriba hasta baseY).
+  for (int col = 0; col < ANALYZER_BAR_WIDTH; col++) {
+    int px = x + col;
+
+    for (int py = topY; py >= baseY; py--) {
+      // Distancia desde la base de la barra (0 en topY, height-1 en baseY).
+      int distFromBase = topY - py;
+
+      // Posición del pico azul: los 3 últimos píxeles de la barra.
+      if (distFromBase >= height - 3 && distFromBase < height) {
+        tft.drawPixel(px, py, tft.color565(ANALYZER_COLOR_PEAK));
+        continue;
+      }
+
+      // Determinar color según tramo (0..18, 18..36, 36..54).
+      uint8_t r, g, b;
+
+      if (distFromBase < 18) {
+        // Tramo 0-18: blanco -> amarillo.
+        float t = distFromBase / 18.0f;
+        r = (uint8_t)(255.0f);
+        g = (uint8_t)(255.0f);
+        b = (uint8_t)(255.0f * (1.0f - t));
+      } else if (distFromBase < 36) {
+        // Tramo 18-36: amarillo -> rojo claro.
+        float t = (distFromBase - 18) / 18.0f;
+        r = (uint8_t)(255.0f);
+        g = (uint8_t)(255.0f * (1.0f - t));
+        b = (uint8_t)(100.0f * (1.0f - t));
+      } else {
+        // Tramo 36-54: rojo claro -> rojo oscuro.
+        float t = (distFromBase - 36) / 18.0f;
+        r = (uint8_t)(255.0f * (1.0f - 0.3f * t)); // 255 -> 180
+        g = (uint8_t)(100.0f * (1.0f - t));         // 100 -> 0
+        b = (uint8_t)(100.0f * (1.0f - t));         // 100 -> 0
+      }
+
+      tft.drawPixel(px, py, tft.color565(r, g, b));
+    }
+  }
+}
+
 void drawFrequencyAnalyzers() {
-  // Placeholder por ahora.
-  // Se implementará cuando se proporcionen:
-  // - Coordenadas X, Y de inicio de cada fila
-  // - Ancho total disponible (px)
-  // - Altura máxima por fila (px)
-  // - Color de las barras
-  // - Espacio entre barras (si quieres)
+  // Dibujar 16 bandas para canal L.
+  for (int band = 0; band < ANALYZER_NUM_BANDS; band++) {
+    float hNorm = fftSmoothL[band];
+    if (hNorm < 0.0f) hNorm = 0.0f;
+    if (hNorm > 1.0f) hNorm = 1.0f;
+
+    int heightPx = (int)(hNorm * ANALYZER_BAR_MAX_HEIGHT + 0.5f);
+    
+    // Umbral mínimo: no dibujar bandas con altura menor a 3px.
+    if (heightPx < 3) {
+      heightPx = 0;
+    }
+    
+    int prevHeight = prevBarHeightL[band];
+
+    int barX = ANALYZER_AXIS_X + band * ANALYZER_BAND_STEP;
+    int barY = ANALYZER_L_Y;
+
+    if (heightPx != prevHeight) {
+      // Limpiar toda la zona de la barra.
+      tft.fillRect(barX, barY, ANALYZER_BAR_WIDTH, ANALYZER_BAR_MAX_HEIGHT, TFT_BLACK);
+
+      // Si hay altura, dibujar la parte INFERIOR del sprite (últimos heightPx píxeles).
+      // El sprite tiene blanco abajo (py=53) y azul arriba (py=0).
+      // Queremos mostrar desde (54 - heightPx) hasta el final (54).
+      if (heightPx > 0) {
+        int srcY = ANALYZER_BAR_MAX_HEIGHT - heightPx;
+        int spriteY = barY + (ANALYZER_BAR_MAX_HEIGHT - heightPx);
+        analyzerBarSprite->pushSprite(barX, spriteY, 0, srcY, ANALYZER_BAR_WIDTH, heightPx);
+      }
+
+      prevBarHeightL[band] = heightPx;
+    }
+  }
+
+  // Dibujar 16 bandas para canal R.
+  for (int band = 0; band < ANALYZER_NUM_BANDS; band++) {
+    float hNorm = fftSmoothR[band];
+    if (hNorm < 0.0f) hNorm = 0.0f;
+    if (hNorm > 1.0f) hNorm = 1.0f;
+
+    int heightPx = (int)(hNorm * ANALYZER_BAR_MAX_HEIGHT + 0.5f);
+    
+    // Umbral mínimo: no dibujar bandas con altura menor a 3px.
+    if (heightPx < 3) {
+      heightPx = 0;
+    }
+    
+    int prevHeight = prevBarHeightR[band];
+
+    int barX = ANALYZER_AXIS_X + band * ANALYZER_BAND_STEP;
+    int barY = ANALYZER_R_Y;
+
+    if (heightPx != prevHeight) {
+      tft.fillRect(barX, barY, ANALYZER_BAR_WIDTH, ANALYZER_BAR_MAX_HEIGHT, TFT_BLACK);
+
+      if (heightPx > 0) {
+        int srcY = ANALYZER_BAR_MAX_HEIGHT - heightPx;
+        int spriteY = barY + (ANALYZER_BAR_MAX_HEIGHT - heightPx);
+        analyzerBarSprite->pushSprite(barX, spriteY, 0, srcY, ANALYZER_BAR_WIDTH, heightPx);
+      }
+
+      prevBarHeightR[band] = heightPx;
+    }
+  }
 }
 
 // Dibujar la pantalla completa VU RADIAL - F.
@@ -6588,6 +6925,46 @@ void drawVuRadialFScreen() {
 
   // VU meter inicial.
   drawVuRadialAudioMeter();
+
+  // Recuadro contenedor de analizadores (plateado, esquinas redondeadas)
+  int frameX = 5;
+  int frameY = VURADIAL_AUDIO_BAR_Y_R + VURADIAL_AUDIO_BAR_H + 5;
+  int frameW = 240 - 10;
+  int frameH = VURADIAL_AUDIO_BUTTON_Y - 8 - frameY;
+  
+  uint16_t frameColor = tft.color565(192, 192, 192);
+  tft.drawRoundRect(frameX, frameY, frameW, frameH, 8, frameColor);
+
+  // Indicadores "L" y "R" dentro del recuadro
+  int y = frameH / 4;  // Altura dividida en 4 partes
+  
+  // Indicadores "L" y "R" dentro del recuadro
+  // y ya está declarada antes como frameH / 4
+  
+  // "L" centrado verticalmente en la primera fila (a distancia y desde el borde superior)
+  // Restamos 8px (mitad de la altura del texto tamaño 2) para centrar
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString("L", frameX + 4, frameY + y - 8);
+  
+  // "R" centrado verticalmente en la tercera fila (a distancia 3*y desde el borde superior)
+  tft.drawString("R", frameX + 4, frameY + 3 * y - 8);
+
+  // Ejes de frecuencia para ambos analizadores
+  int axisX = frameX + 18;  // 18px desde el borde izquierdo del recuadro
+  int axisW = 208;  // 208px de largo
+  
+  // Eje inferior (5px más arriba del borde inferior del recuadro) - se declara primero
+  int axisY2 = frameY + frameH - 5;
+  tft.drawFastHLine(axisX, axisY2, axisW, frameColor);
+  
+  // Eje superior (equilibrado: misma distancia al borde superior que al Eje R)
+  int axisY1 = (axisY2 + frameY) / 2;
+  tft.drawFastHLine(axisX, axisY1, axisW, frameColor);
+
+  // Dibujar analizadores de frecuencia.
+  drawFrequencyAnalyzers();
 
   // Botón con flecha izquierda (retrocede a VU RADIAL - A).
   // Usar las mismas constantes que VU RADIAL - A para alineación vertical y tamaño
@@ -6922,12 +7299,12 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.2.8.1",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.4.0.0",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
-  tft.drawString("Junio 2026",          120, y); y += dy;
+  tft.drawString("Agosto 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
   tft.drawString("EC11 + Foco WS2812B", 120, y); y += dy;
-  tft.drawString("INMP441 + Max98357A", 120, y); y += dy;
+  tft.drawString("INMP441", 120, y); y += dy;
   tft.drawString("Proyecto DIY",        120, y);
 }
 
@@ -6940,7 +7317,7 @@ void setup() {
 
   initI2SAudio();
 
-  Serial.println("LAMP_Fun V.2.8.1");
+  Serial.println("LAMP_Fun V.4.0.0");
 
   initBacklight();
 
@@ -6987,6 +7364,61 @@ void setup() {
     initManualTime_2026();
   }
 
+  // Inicializar alturas anteriores de las barras a 0.
+  for (int i = 0; i < FFT_BANDS; i++) {
+    prevBarHeightL[i] = 0;
+    prevBarHeightR[i] = 0;
+  }
+
+  // Crear sprite para el degradado de las barras (12x54 px).
+  analyzerBarSprite = new TFT_eSprite(&tft);
+  analyzerBarSprite->createSprite(ANALYZER_BAR_WIDTH, ANALYZER_BAR_MAX_HEIGHT);
+
+
+  // Dibujar el degradado en el sprite (una sola vez).
+  // El sprite tiene el origen (0,0) arriba-izquierda.
+  // Queremos: blanco abajo (py=53), azul arriba (py=0).
+  for (int col = 0; col < ANALYZER_BAR_WIDTH; col++) {
+    for (int py = 0; py < ANALYZER_BAR_MAX_HEIGHT; py++) {
+      // Distancia desde abajo (0 abajo, 53 arriba).
+      int distFromBottom = (ANALYZER_BAR_MAX_HEIGHT - 1) - py;
+
+
+      // Pico azul: últimos 3 px de la barra (parte superior visual = py=0,1,2).
+      if (distFromBottom >= ANALYZER_BAR_MAX_HEIGHT - 3) {
+        analyzerBarSprite->drawPixel(col, py, tft.color565(0, 150, 255));  // Azul brillante
+        continue;
+      }
+
+
+      // Determinar color según tramo (degradado blanco → amarillo → naranja → rojo).
+      uint8_t r, g, b;
+
+
+      if (distFromBottom < 18) {
+        // Tramo 0-18: blanco -> amarillo.
+        float t = distFromBottom / 18.0f;
+        r = 255;
+        g = 255;
+        b = (uint8_t)(255.0f * (1.0f - t));  // t=0 -> b=255 (blanco), t=1 -> b=0 (amarillo)
+      } else if (distFromBottom < 36) {
+        // Tramo 18-36: amarillo -> naranja -> rojo.
+        float t = (distFromBottom - 18) / 18.0f;
+        r = 255;
+        g = (uint8_t)(255.0f * (1.0f - t * 0.7f));  // t=0 -> g=255 (amarillo), t=1 -> g~76 (rojo-naranja)
+        b = 0;
+      } else {
+        // Tramo 36-51: rojo intenso.
+        r = 255;
+        g = 50;
+        b = 0;
+      }
+
+
+      analyzerBarSprite->drawPixel(col, py, tft.color565(r, g, b));
+    }
+  }
+
   lastWifiBars    = -1;
   lastWifiTachado = false;
   currentScreen   = SCREEN_SPLASH;
@@ -7006,42 +7438,34 @@ void loop() {
     stepDir = readEncoderStep();
   }
 
-
   // Lectura antirrebote del pulsador principal del encoder.
   static bool encButtonStableState = HIGH;
   static bool encButtonLastReading = HIGH;
   static unsigned long encButtonLastChangeMillis = 0;
-
 
   // Lectura antirrebote del botón 2.
   static bool button2StableState = HIGH;
   static bool button2LastReading = HIGH;
   static unsigned long button2LastChangeMillis = 0;
 
-
   const unsigned long BUTTON_DEBOUNCE_MS = 35;
   unsigned long buttonNow = millis();
 
-
   bool encButtonReading = digitalRead(ENCODER_SW);
   bool button2Reading   = digitalRead(BUTTON2_PIN);
-
 
   if (encButtonReading != encButtonLastReading) {
     encButtonLastChangeMillis = buttonNow;
     encButtonLastReading = encButtonReading;
   }
 
-
   if (button2Reading != button2LastReading) {
     button2LastChangeMillis = buttonNow;
     button2LastReading = button2Reading;
   }
 
-
   bool encButtonFalling = false;
   bool btn2Falling      = false;
-
 
   if ((buttonNow - encButtonLastChangeMillis) >=
       BUTTON_DEBOUNCE_MS) {
@@ -7056,7 +7480,6 @@ void loop() {
       }
     }
   }
-
 
   if ((buttonNow - button2LastChangeMillis) >=
       BUTTON_DEBOUNCE_MS) {
@@ -8134,16 +8557,13 @@ void loop() {
             int value =
               (int)vuRadialSensitivity + dir * valueStep;
 
-
             if (value < 0) {
               value = 0;
             }
 
-
             if (value > 100) {
               value = 100;
             }
-
 
             if (value != vuRadialSensitivity) {
               vuRadialSensitivity = (uint8_t)value;
@@ -8152,21 +8572,17 @@ void loop() {
             break;
           }
 
-
           case VURADIAL_A_FOCUS_THRESHOLD: {
             int value =
               (int)vuRadialThreshold + dir * valueStep;
-
 
             if (value < 0) {
               value = 0;
             }
 
-
             if (value > 100) {
               value = 100;
             }
-
 
             if (value != vuRadialThreshold) {
               vuRadialThreshold = (uint8_t)value;
@@ -8175,21 +8591,17 @@ void loop() {
             break;
           }
 
-
           case VURADIAL_A_FOCUS_SPEED: {
             int value =
               (int)vuRadialSpeed + dir * valueStep;
-
 
             if (value < 0) {
               value = 0;
             }
 
-
             if (value > 100) {
               value = 100;
             }
-
 
             if (value != vuRadialSpeed) {
               vuRadialSpeed = (uint8_t)value;
@@ -8198,21 +8610,17 @@ void loop() {
             break;
           }
 
-
           case VURADIAL_A_FOCUS_CHANNEL: {
             int value =
               (int)vuRadialChannelMode + dir;
-
 
             if (value < 0) {
               value = 0;
             }
 
-
             if (value > 3) {
               value = 3;
             }
-
 
             if (value != vuRadialChannelMode) {
               vuRadialChannelMode = (uint8_t)value;
@@ -8221,13 +8629,11 @@ void loop() {
             break;
           }
 
-
           case VURADIAL_A_FOCUS_LEFT_BUTTON:
           case VURADIAL_A_FOCUS_RIGHT_BUTTON:
             // El giro no modifica los botones.
             break;
         }
-
 
         if (changed) {
           redrawVuRadialAudioFocusedControl();
@@ -8330,6 +8736,12 @@ void loop() {
 
       drawVuRadialAudioMeter();
 
+      // Actualizar audio (necesario para alimentar la FFT)
+      if (!i2sAudioInitialized) {
+        initI2SAudio();
+      }
+      updateAudioLevels();
+
       // Calcular FFT periódicamente
       calculateFFT();
       
@@ -8382,7 +8794,6 @@ void loop() {
         }
       }
 
-
       // Botón 2: volver al menú de efectos
       if (btn2Falling) {
         if (vuRadialEffectActive) {
@@ -8406,7 +8817,6 @@ void loop() {
         currentScreen = SCREEN_SETTINGS_EFFECTS;
         drawSettingsEffectsScreen();
       }
-
 
       break;
     }
@@ -8715,14 +9125,29 @@ void loop() {
       break;
   }
 
-  // Actualizar niveles de audio si estamos en la pantalla VU RADIAL - A
-  if (currentScreen == SCREEN_SETTINGS_VURADIAL_A) {
-    // Inicializar audio la primera vez que entramos
+  // Actualizar niveles de audio en las pantallas VU RADIAL - A y F.
+  // Ambas pantallas necesitan leer I2S continuamente:
+  // A muestra los VU Meter y F alimenta los analizadores FFT.
+  if (
+    currentScreen == SCREEN_SETTINGS_VURADIAL_A ||
+    currentScreen == SCREEN_SETTINGS_VURADIAL_F
+  ) {
     if (!i2sAudioInitialized) {
       initI2SAudio();
     }
+
     updateAudioLevels();
-    drawVuRadialAudioMeter();
+
+    // El VU Meter se dibuja aquí solo en la pantalla A.
+    if (currentScreen == SCREEN_SETTINGS_VURADIAL_A) {
+      drawVuRadialAudioMeter();
+    }
+  }
+
+  // Calcular FFT si hay buffer lleno para analizadores
+  // (después de que updateAudioLevels() haya tenido oportunidad de llenar el buffer)
+  if (fftBufferReady) {
+    calculateFFT();
   }
 
   if (lampOn && rainbowMode) {
