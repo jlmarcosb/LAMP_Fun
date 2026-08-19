@@ -13,6 +13,9 @@
 #include <math.h>
 #include <ESP_I2S.h>
 #include <arduinoFFT.h>
+using fs::FS;
+#include <WebServer.h>
+#include <ESPmDNS.h>
 
 // ----------------- Audio I2S estéreo INMP441 -----------------
 
@@ -889,6 +892,7 @@ int8_t tzOffsetSteps = 0;  // -4..+4 => -2.0..+2.0 h en pasos 0.5h
 // ----------------- Configuración general -----------------
 
 TFT_eSPI tft;
+WebServer server(80);
 CRGB     leds[NUM_LEDS];
 
 // ---------- Geometría del foco: "Foco de José Luís" ----------
@@ -7308,10 +7312,35 @@ void drawSettingsAboutScreen() {
   tft.drawString("Proyecto DIY",        120, y);
 }
 
+// ----------------- Handler HTTP para encender/apagar -----------------
+
+void handlePower() {
+  if (server.hasArg("state")) {
+    String state = server.arg("state");
+    
+    if (state == "on") {
+      lampOn = true;
+      updateLeds();
+      if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+      server.send(200, "text/plain", "OK: Lamp ON");
+    } else if (state == "off") {
+      lampOn = false;
+      updateLeds();
+      if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+      server.send(200, "text/plain", "OK: Lamp OFF");
+    } else {
+      server.send(400, "text/plain", "Error: Invalid state (use 'on' or 'off')");
+    }
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'state' parameter");
+  }
+}
+
 // ----------------- setup() -----------------
 
 void setup() {
   Serial.begin(115200);
+  server.on("/power", handlePower);
 
   delay(1000);
 
@@ -7353,6 +7382,13 @@ void setup() {
       tzset();
       configTzTime(TIMEZONES[tzIndex].tzStr, NTP_SERVER);
       lastNtpSyncMillis = millis();
+
+      server.begin();
+      MDNS.begin("lamp_fun");
+      
+      Serial.print("IP: http://");
+      Serial.println(WiFi.localIP());
+      Serial.println("mDNS: http://lamp_fun.local");
     } else {
       useAutoTime = false;
       saveConfigBasic();
@@ -7430,6 +7466,9 @@ void setup() {
 // ----------------- loop() -----------------
 
 void loop() {
+
+  server.handleClient();
+
   // En VU RADIAL - A se utiliza exclusivamente su decoder específico.
   // Evitar que el decoder general lea también ENCODER_A/ENCODER_B.
   int stepDir = 0;
