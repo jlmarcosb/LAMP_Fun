@@ -1324,7 +1324,7 @@ void stopVuRadialEffect() {
 const int TFT_BL_FREQUENCY = 5000;
 const int TFT_BL_RES       = 8;
 
-uint8_t tftBacklightLevel = 100;
+uint8_t tftBacklightLevel = 50;
 bool    tftBacklightEnabled = true;
 
 uint8_t backlightPercentToDuty(uint8_t level, bool enabled) {
@@ -1340,7 +1340,7 @@ void applyBacklightPWM() {
 
 void initBacklight() {
   pinMode(TFT_BL_PIN, OUTPUT);
-  tftBacklightLevel   = 100;
+  tftBacklightLevel   = 50;
   tftBacklightEnabled = true;
   ledcAttach(TFT_BL_PIN, TFT_BL_FREQUENCY, TFT_BL_RES);
   applyBacklightPWM();
@@ -1359,6 +1359,7 @@ enum Screen {
   SCREEN_SETTINGS_TIMEZONE,
   SCREEN_SETTINGS_TZOFFSET,
   SCREEN_SETTINGS_MAIN,
+  SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_EFFECTS,
   SCREEN_SETTINGS_RESP,
   SCREEN_SETTINGS_COMET,
@@ -1368,7 +1369,6 @@ enum Screen {
   SCREEN_SETTINGS_VURADIAL,
   SCREEN_SETTINGS_VURADIAL_A,
   SCREEN_SETTINGS_VURADIAL_F,
-  SCREEN_SETTINGS_BACKLIGHT,
   SCREEN_SETTINGS_COLORS_DIGITAL,
   SCREEN_SETTINGS_COLORS_ANALOG,
   SCREEN_SETTINGS_WIFI,
@@ -1563,7 +1563,7 @@ void loadConfig() {
     brightness        = 5;
     use24hFormat      = true;
     useAutoTime       = true;
-    tftBacklightLevel = 100;
+    tftBacklightLevel = 50;
     clockMode         = 0;
     tzIndex           = 1;
     tzOffsetSteps     = 0;
@@ -7336,11 +7336,108 @@ void handlePower() {
   }
 }
 
+void handleBrightness() {
+  if (server.hasArg("value")) {
+    int newVal = server.arg("value").toInt();
+    if (newVal < 0) newVal = 0;
+    if (newVal > 255) newVal = 255;
+    
+    brightness = newVal;
+    saveConfigBasic();
+    FastLED.setBrightness(brightness);
+    FastLED.show();
+    
+    if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+    
+    server.send(200, "text/plain", "OK: Brightness " + String(brightness));
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+  }
+}
+
+void handleColorR() {
+  if (server.hasArg("value")) {
+    int newVal = server.arg("value").toInt();
+    if (newVal < 0) newVal = 0;
+    if (newVal > 255) newVal = 255;
+    
+    redValue = newVal;
+    saveConfigBasic();
+    updateLeds();
+    
+    if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+    
+    server.send(200, "text/plain", "OK: Red " + String(redValue));
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+  }
+}
+
+void handleColorG() {
+  if (server.hasArg("value")) {
+    int newVal = server.arg("value").toInt();
+    if (newVal < 0) newVal = 0;
+    if (newVal > 255) newVal = 255;
+    
+    greenValue = newVal;
+    saveConfigBasic();
+    updateLeds();
+    
+    if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+    
+    server.send(200, "text/plain", "OK: Green " + String(greenValue));
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+  }
+}
+
+void handleColorB() {
+  if (server.hasArg("value")) {
+    int newVal = server.arg("value").toInt();
+    if (newVal < 0) newVal = 0;
+    if (newVal > 255) newVal = 255;
+    
+    blueValue = newVal;
+    saveConfigBasic();
+    updateLeds();
+    
+    if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+    
+    server.send(200, "text/plain", "OK: Blue " + String(blueValue));
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+  }
+}
+
+void handleBacklight() {
+  if (server.hasArg("value")) {
+    int newVal = server.arg("value").toInt();
+    if (newVal < 0) newVal = 0;
+    if (newVal > 100) newVal = 100;
+    
+    tftBacklightLevel = newVal;
+    saveConfigBasic();
+    applyBacklightPWM();
+    
+    if (currentScreen == SCREEN_SETTINGS_BACKLIGHT) drawSettingsBacklightScreen();
+    
+    server.send(200, "text/plain", "OK: Backlight " + String(tftBacklightLevel));
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+  }
+}
+
 // ----------------- setup() -----------------
 
 void setup() {
   Serial.begin(115200);
+
   server.on("/power", handlePower);
+  server.on("/brightness", handleBrightness);
+  server.on("/color/r", handleColorR);
+  server.on("/color/g", handleColorG);
+  server.on("/color/b", handleColorB);
+  server.on("/backlight", handleBacklight);
 
   delay(1000);
 
@@ -7358,6 +7455,7 @@ void setup() {
   lastEncA = digitalRead(ENCODER_A);
 
   loadConfig();
+  lampOn = false;
   wifiLoadCredentials();
   applyBacklightPWM();
 
