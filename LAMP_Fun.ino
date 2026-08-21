@@ -2,6 +2,7 @@
 // José Luís Marcos Bezos - Agosto 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441
+// Integración con Alexa y control vía web y APP.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -16,6 +17,8 @@
 using fs::FS;
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <SinricPro.h>
+#include <SinricProLight.h>
 
 // ----------------- Audio I2S estéreo INMP441 -----------------
 
@@ -859,6 +862,14 @@ const int WIFI_PWD_BUF_LEN  = 64;
 char wifiSsid[WIFI_SSID_BUF_LEN + 1] = {0};
 char wifiPwdEnc[WIFI_PWD_BUF_LEN + 1] = {0};
 bool hasWifiCredentials = false;
+
+// Credenciales Sinric Pro
+#define APP_KEY           "8eba55fe-adf4-4338-8dfb-649b2f296288"
+#define APP_SECRET        "fe3f0d36-5d0f-4130-a580-24d77baf2feb-3e31a930-7001-4b7a-957f-591bfaac14ea"
+#define DEVICE_ID         "6a86d78929c6be334297e6f2"
+
+// Objeto Sinric Pro
+bool lampFun_powerState = false;
 
 // Reintento WiFi
 unsigned long lastWifiCheckMillis = 0;
@@ -7427,6 +7438,202 @@ void handleBacklight() {
   }
 }
 
+void handleClockMode() {
+  if (server.hasArg("mode")) {
+    String mode = server.arg("mode");
+    
+    if (mode == "analog") {
+      clockMode = 1;
+      saveConfigBasic();
+      if (currentScreen == SCREEN_CLOCK) drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Clock Analog");
+    } else if (mode == "digital") {
+      clockMode = 0;
+      saveConfigBasic();
+      if (currentScreen == SCREEN_CLOCK) drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Clock Digital");
+    } else {
+      server.send(400, "text/plain", "Error: Invalid mode (use 'analog' or 'digital')");
+    }
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'mode' parameter");
+  }
+}
+
+void handleEffect() {
+  if (server.hasArg("name")) {
+    String effectName = server.arg("name");
+    
+    // Primero parar todos los efectos
+    if (respEffectActive) stopRespEffect();
+    if (cometEffectActive) stopCometEffect();
+    if (barridoEffectActive) stopBarridoEffect();
+    if (persianaEffectActive) stopPersianaEffect();
+    if (relojEffectActive) stopRelojEffect();
+    if (vuRadialEffectActive) stopVuRadialEffect();
+    
+    // Activar el seleccionado
+    if (effectName == "respiracion") {
+      startRespEffect();
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Effect RESPIRACION");
+    } else if (effectName == "cometa") {
+      startCometEffect();
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Effect COMETA");
+    } else if (effectName == "barrido") {
+      startBarridoEffect();
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Effect BARRIDO");
+    } else if (effectName == "persiana") {
+      startPersianaEffect();
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Effect PERSIANA");
+    } else if (effectName == "reloj") {
+      startRelojEffect();
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: Effect RELOJ");
+    } else if (effectName == "vuradial") {
+      // VU RADIAL: mostrar pantalla F
+      vuRadialEffectActive = true;
+      anyEffectActive = true;
+      vuRadialLedPeakL = 0;
+      vuRadialLedPeakR = 0;
+      vuRadialLedPeakLastUpdateMillis = millis();
+      currentScreen = SCREEN_SETTINGS_VURADIAL_F;
+      drawVuRadialFScreen();
+      server.send(200, "text/plain", "OK: Effect VU RADIAL");
+    } else if (effectName == "none") {
+      // Parar todos sin activar ninguno
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+      server.send(200, "text/plain", "OK: All effects stopped");
+    } else {
+      server.send(400, "text/plain", "Error: Unknown effect name");
+    }
+  } else {
+    server.send(400, "text/plain", "Error: Missing 'name' parameter");
+  }
+}
+
+void handleRestart() {
+  server.send(200, "text/plain", "OK: Restarting...");
+  delay(100);
+  ESP.restart();
+}
+
+void handleSystem() {
+  String json = "{";
+  json += "\"version\":\"LAMP_Fun V.4.0.0\",";
+  json += "\"author\":\"J. L. Marcos Bezos\",";
+  json += "\"date\":\"Agosto 2026\",";
+  json += "\"hardware\":\"ESP32 + TFT 240x240\",";
+  json += "\"input\":\"EC11 + Foco WS2812B\",";
+  json += "\"mic\":\"INMP441\",";
+  json += "\"type\":\"Proyecto DIY\",";
+  json += "\"uptime\":" + String(millis() / 1000) + ",";
+  json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+  json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  json += "\"ssid\":\"" + String(wifiSsid) + "\",";
+  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  json += "\"channel\":" + String(WiFi.channel());
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
+
+void handleStatus() {
+  String json = "{";
+  json += "\"lampOn\":" + String(lampOn ? "true" : "false") + ",";
+  json += "\"brightness\":" + String(brightness) + ",";
+  json += "\"red\":" + String(redValue) + ",";
+  json += "\"green\":" + String(greenValue) + ",";
+  json += "\"blue\":" + String(blueValue) + ",";
+  json += "\"backlight\":" + String(tftBacklightLevel) + ",";
+  json += "\"clockMode\":" + String(clockMode);
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
+
+// Handler Sinric Pro: encendido/apagado
+bool onPowerStateHandler(const String& deviceId, bool& state) {
+  lampFun_powerState = state;
+  
+  if (state) {
+    // Encender: parar efectos, borrar LEDs y luego encender
+    stopAllEffects();
+    clearAllLedsAndShow();
+    
+    lampOn = true;
+    updateLeds();
+    if (currentScreen == SCREEN_LIGHT) redrawLightControls();
+  } else {
+    // Apagar: parar efectos, apagar LEDs y volver al reloj
+    stopAllEffects();
+    
+    lampOn = false;
+    updateLeds();
+    
+    // Si estamos en VU RADIAL F, volver al reloj
+    if (currentScreen == SCREEN_SETTINGS_VURADIAL_F) {
+      currentScreen = SCREEN_CLOCK;
+      drawClockScreenFull();
+    } else if (currentScreen == SCREEN_LIGHT) {
+      redrawLightControls();
+    }
+  }
+  
+  return true;
+}
+
+// Handler Sinric Pro: brillo
+bool onBrightnessHandler(const String& deviceId, int& brightness) {
+  // Convertir 0-100 (Sinric) a 0-255 (nuestro sistema)
+  uint8_t newBrightness = map(brightness, 0, 100, 0, 255);
+  
+  // Actualizar variable global
+  ::brightness = newBrightness;
+  
+  if (lampOn) {
+    updateLeds();
+  }
+  
+  if (currentScreen == SCREEN_LIGHT) {
+    redrawLightControls();
+  }
+  
+  // Guardar configuración
+  saveConfigBasic();
+  
+  return true;
+}
+
+// Handler Sinric Pro: color RGB
+bool onColorHandler(const String& deviceId, unsigned char& r, unsigned char& g, unsigned char& b) {
+  redValue = r;
+  greenValue = g;
+  blueValue = b;
+  
+  if (lampOn) {
+    updateLeds();
+  }
+  
+  if (currentScreen == SCREEN_LIGHT) {
+    redrawLightControls();
+  }
+
+  // Guardar configuración
+  saveConfigBasic();
+  
+  return true;
+}
+
 // ----------------- setup() -----------------
 
 void setup() {
@@ -7438,6 +7645,11 @@ void setup() {
   server.on("/color/g", handleColorG);
   server.on("/color/b", handleColorB);
   server.on("/backlight", handleBacklight);
+  server.on("/clockMode", handleClockMode);
+  server.on("/effect", handleEffect);
+  server.on("/status", handleStatus);
+  server.on("/restart", handleRestart);
+  server.on("/system", handleSystem);
 
   delay(1000);
 
@@ -7487,6 +7699,21 @@ void setup() {
       Serial.print("IP: http://");
       Serial.println(WiFi.localIP());
       Serial.println("mDNS: http://lamp_fun.local");
+
+      // Inicializar Sinric Pro
+      SinricProLight &lampFunRef = SinricPro[DEVICE_ID];
+      lampFunRef.onPowerState(onPowerStateHandler);
+      lampFunRef.onBrightness(onBrightnessHandler);
+      lampFunRef.onColor(onColorHandler);
+
+      SinricPro.begin(APP_KEY, APP_SECRET);
+
+      // Enviar estado actual
+      lampFunRef.sendPowerStateEvent(lampOn);
+      lampFunRef.sendBrightnessEvent(map(brightness, 0, 255, 0, 100));
+      lampFunRef.sendColorEvent(redValue, greenValue, blueValue);
+
+      Serial.println("Sinric Pro: dispositivo registrado como bombilla");
     } else {
       useAutoTime = false;
       saveConfigBasic();
@@ -7564,6 +7791,8 @@ void setup() {
 // ----------------- loop() -----------------
 
 void loop() {
+
+  SinricPro.handle();
 
   server.handleClient();
 
