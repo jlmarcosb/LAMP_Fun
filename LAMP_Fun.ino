@@ -1,8 +1,8 @@
-// LAMP_Fun V.4.0.0
+// LAMP_Fun V.5.0.0
 // José Luís Marcos Bezos - Agosto 2026.
 // ESP32 + TFT ST7789 240x240 con Encoder EC11 con pulsador
 // pulsador extra + WS2812B + INMP441
-// Integración con Alexa y control vía web y APP.
+// Integración con Alexa, App y Web
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -15,10 +15,11 @@
 #include <ESP_I2S.h>
 #include <arduinoFFT.h>
 using fs::FS;
-#include <WebServer.h>
+#include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
 #include <SinricPro.h>
 #include <SinricProLight.h>
+#include "webserver.h"
 
 // ----------------- Audio I2S estéreo INMP441 -----------------
 
@@ -903,7 +904,7 @@ int8_t tzOffsetSteps = 0;  // -4..+4 => -2.0..+2.0 h en pasos 0.5h
 // ----------------- Configuración general -----------------
 
 TFT_eSPI tft;
-WebServer server(80);
+AsyncWebServer server(80);
 CRGB     leds[NUM_LEDS];
 
 // ---------- Geometría del foco: "Foco de José Luís" ----------
@@ -3323,7 +3324,7 @@ void drawSplashScreen() {
   tft.drawString("LAMP_Fun", 120, 55);
 
   tft.setTextSize(2);
-  tft.drawString("V.4.0.0", 120, 85);
+  tft.drawString("V.5.0.0", 120, 85);
 
   tft.setTextSize(1);
   tft.drawString("Inicializando...", 120, 110);
@@ -7314,7 +7315,7 @@ void drawSettingsAboutScreen() {
   int y  = 60;
   int dy = 20;
 
-  tft.drawString("LAMP_Fun V.4.0.0",     120, y); y += dy + 4;
+  tft.drawString("LAMP_Fun V.5.0.0",     120, y); y += dy + 4;
   tft.drawString("J. L. Marcos Bezos",   120, y); y += dy;
   tft.drawString("Agosto 2026",          120, y); y += dy;
   tft.drawString("ESP32 + TFT 240x240",   120, y); y += dy;
@@ -7323,52 +7324,53 @@ void drawSettingsAboutScreen() {
   tft.drawString("Proyecto DIY",        120, y);
 }
 
-// ----------------- Handler HTTP para encender/apagar -----------------
+// ============================================================================
+// HANDLERS HTTP PARA EL SERVIDOR WEB (ESPAsyncWebServer)
+// ============================================================================
 
-void handlePower() {
-  if (server.hasArg("state")) {
-    String state = server.arg("state");
+void handlePower(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    String state = request->getParam("value", true)->value();
     
     if (state == "on") {
       lampOn = true;
       updateLeds();
       if (currentScreen == SCREEN_LIGHT) redrawLightControls();
-      server.send(200, "text/plain", "OK: Lamp ON");
+      request->send(200, "text/plain", "OK");
     } else if (state == "off") {
       lampOn = false;
       updateLeds();
       if (currentScreen == SCREEN_LIGHT) redrawLightControls();
-      server.send(200, "text/plain", "OK: Lamp OFF");
+      request->send(200, "text/plain", "OK");
     } else {
-      server.send(400, "text/plain", "Error: Invalid state (use 'on' or 'off')");
+      request->send(400, "text/plain", "Error");
     }
   } else {
-    server.send(400, "text/plain", "Error: Missing 'state' parameter");
+    request->send(400, "text/plain", "Error: Missing value");
   }
 }
 
-void handleBrightness() {
-  if (server.hasArg("value")) {
-    int newVal = server.arg("value").toInt();
+void handleBrightness(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    int newVal = request->getParam("value", true)->value().toInt();
     if (newVal < 0) newVal = 0;
     if (newVal > 255) newVal = 255;
     
     brightness = newVal;
     saveConfigBasic();
-    FastLED.setBrightness(brightness);
-    FastLED.show();
+    updateLeds();
     
     if (currentScreen == SCREEN_LIGHT) redrawLightControls();
     
-    server.send(200, "text/plain", "OK: Brightness " + String(brightness));
+    request->send(200, "text/plain", "OK");
   } else {
-    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleColorR() {
-  if (server.hasArg("value")) {
-    int newVal = server.arg("value").toInt();
+void handleColorR(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    int newVal = request->getParam("value", true)->value().toInt();
     if (newVal < 0) newVal = 0;
     if (newVal > 255) newVal = 255;
     
@@ -7378,15 +7380,15 @@ void handleColorR() {
     
     if (currentScreen == SCREEN_LIGHT) redrawLightControls();
     
-    server.send(200, "text/plain", "OK: Red " + String(redValue));
+    request->send(200, "text/plain", "OK");
   } else {
-    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleColorG() {
-  if (server.hasArg("value")) {
-    int newVal = server.arg("value").toInt();
+void handleColorG(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    int newVal = request->getParam("value", true)->value().toInt();
     if (newVal < 0) newVal = 0;
     if (newVal > 255) newVal = 255;
     
@@ -7396,15 +7398,15 @@ void handleColorG() {
     
     if (currentScreen == SCREEN_LIGHT) redrawLightControls();
     
-    server.send(200, "text/plain", "OK: Green " + String(greenValue));
+    request->send(200, "text/plain", "OK");
   } else {
-    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleColorB() {
-  if (server.hasArg("value")) {
-    int newVal = server.arg("value").toInt();
+void handleColorB(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    int newVal = request->getParam("value", true)->value().toInt();
     if (newVal < 0) newVal = 0;
     if (newVal > 255) newVal = 255;
     
@@ -7414,15 +7416,15 @@ void handleColorB() {
     
     if (currentScreen == SCREEN_LIGHT) redrawLightControls();
     
-    server.send(200, "text/plain", "OK: Blue " + String(blueValue));
+    request->send(200, "text/plain", "OK");
   } else {
-    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleBacklight() {
-  if (server.hasArg("value")) {
-    int newVal = server.arg("value").toInt();
+void handleBacklight(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    int newVal = request->getParam("value", true)->value().toInt();
     if (newVal < 0) newVal = 0;
     if (newVal > 100) newVal = 100;
     
@@ -7432,74 +7434,66 @@ void handleBacklight() {
     
     if (currentScreen == SCREEN_SETTINGS_BACKLIGHT) drawSettingsBacklightScreen();
     
-    server.send(200, "text/plain", "OK: Backlight " + String(tftBacklightLevel));
+    request->send(200, "text/plain", "OK");
   } else {
-    server.send(400, "text/plain", "Error: Missing 'value' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleClockMode() {
-  if (server.hasArg("mode")) {
-    String mode = server.arg("mode");
+void handleClockMode(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    String mode = request->getParam("value", true)->value();
     
     if (mode == "analog") {
       clockMode = 1;
       saveConfigBasic();
       if (currentScreen == SCREEN_CLOCK) drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Clock Analog");
+      request->send(200, "text/plain", "OK");
     } else if (mode == "digital") {
       clockMode = 0;
       saveConfigBasic();
       if (currentScreen == SCREEN_CLOCK) drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Clock Digital");
+      request->send(200, "text/plain", "OK");
     } else {
-      server.send(400, "text/plain", "Error: Invalid mode (use 'analog' or 'digital')");
+      request->send(400, "text/plain", "Error");
     }
   } else {
-    server.send(400, "text/plain", "Error: Missing 'mode' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleEffect() {
-  if (server.hasArg("name")) {
-    String effectName = server.arg("name");
+void handleEffect(AsyncWebServerRequest *request) {
+  if (request->hasParam("value", true)) {
+    String effectName = request->getParam("value", true)->value();
     
-    // Primero parar todos los efectos
-    if (respEffectActive) stopRespEffect();
-    if (cometEffectActive) stopCometEffect();
-    if (barridoEffectActive) stopBarridoEffect();
-    if (persianaEffectActive) stopPersianaEffect();
-    if (relojEffectActive) stopRelojEffect();
-    if (vuRadialEffectActive) stopVuRadialEffect();
+    stopAllEffects();
     
-    // Activar el seleccionado
     if (effectName == "respiracion") {
       startRespEffect();
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Effect RESPIRACION");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "cometa") {
       startCometEffect();
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Effect COMETA");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "barrido") {
       startBarridoEffect();
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Effect BARRIDO");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "persiana") {
       startPersianaEffect();
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Effect PERSIANA");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "reloj") {
       startRelojEffect();
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: Effect RELOJ");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "vuradial") {
-      // VU RADIAL: mostrar pantalla F
       vuRadialEffectActive = true;
       anyEffectActive = true;
       vuRadialLedPeakL = 0;
@@ -7507,35 +7501,31 @@ void handleEffect() {
       vuRadialLedPeakLastUpdateMillis = millis();
       currentScreen = SCREEN_SETTINGS_VURADIAL_F;
       drawVuRadialFScreen();
-      server.send(200, "text/plain", "OK: Effect VU RADIAL");
+      request->send(200, "text/plain", "OK");
     } else if (effectName == "none") {
-      // Parar todos sin activar ninguno
       currentScreen = SCREEN_CLOCK;
       drawClockScreenFull();
-      server.send(200, "text/plain", "OK: All effects stopped");
+      request->send(200, "text/plain", "OK");
     } else {
-      server.send(400, "text/plain", "Error: Unknown effect name");
+      request->send(400, "text/plain", "Error");
     }
   } else {
-    server.send(400, "text/plain", "Error: Missing 'name' parameter");
+    request->send(400, "text/plain", "Error");
   }
 }
 
-void handleRestart() {
-  server.send(200, "text/plain", "OK: Restarting...");
+void handleRestart(AsyncWebServerRequest *request) {
+  request->send(200, "text/plain", "OK: Restarting...");
   delay(100);
   ESP.restart();
 }
 
-void handleSystem() {
+void handleSystem(AsyncWebServerRequest *request) {
   String json = "{";
-  json += "\"version\":\"LAMP_Fun V.4.0.0\",";
+  json += "\"version\":\"LAMP_Fun V.5.0.0\",";
   json += "\"author\":\"J. L. Marcos Bezos\",";
   json += "\"date\":\"Agosto 2026\",";
   json += "\"hardware\":\"ESP32 + TFT 240x240\",";
-  json += "\"input\":\"EC11 + Foco WS2812B\",";
-  json += "\"mic\":\"INMP441\",";
-  json += "\"type\":\"Proyecto DIY\",";
   json += "\"uptime\":" + String(millis() / 1000) + ",";
   json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
@@ -7544,10 +7534,10 @@ void handleSystem() {
   json += "\"channel\":" + String(WiFi.channel());
   json += "}";
   
-  server.send(200, "application/json", json);
+  request->send(200, "application/json", json);
 }
 
-void handleStatus() {
+void handleStatus(AsyncWebServerRequest *request) {
   String json = "{";
   json += "\"lampOn\":" + String(lampOn ? "true" : "false") + ",";
   json += "\"brightness\":" + String(brightness) + ",";
@@ -7558,7 +7548,11 @@ void handleStatus() {
   json += "\"clockMode\":" + String(clockMode);
   json += "}";
   
-  server.send(200, "application/json", json);
+  request->send(200, "application/json", json);
+}
+
+void handleWebRoot(AsyncWebServerRequest *request) {
+  request->send_P(200, "text/html", INDEX_HTML);
 }
 
 // Handler Sinric Pro: encendido/apagado
@@ -7639,23 +7633,27 @@ bool onColorHandler(const String& deviceId, unsigned char& r, unsigned char& g, 
 void setup() {
   Serial.begin(115200);
 
-  server.on("/power", handlePower);
-  server.on("/brightness", handleBrightness);
-  server.on("/color/r", handleColorR);
-  server.on("/color/g", handleColorG);
-  server.on("/color/b", handleColorB);
-  server.on("/backlight", handleBacklight);
-  server.on("/clockMode", handleClockMode);
-  server.on("/effect", handleEffect);
-  server.on("/status", handleStatus);
-  server.on("/restart", handleRestart);
-  server.on("/system", handleSystem);
+  // --- Handlers para el servidor web ---
+  server.on("/", HTTP_GET, handleWebRoot);
+  server.on("/power", HTTP_GET, handlePower);
+  server.on("/brightness", HTTP_GET, handleBrightness);
+  server.on("/colorR", HTTP_GET, handleColorR);
+  server.on("/colorG", HTTP_GET, handleColorG);
+  server.on("/colorB", HTTP_GET, handleColorB);
+  server.on("/backlight", HTTP_GET, handleBacklight);
+  server.on("/clockMode", HTTP_GET, handleClockMode);
+  server.on("/effect", HTTP_GET, handleEffect);
+  server.on("/restart", HTTP_GET, handleRestart);
+  server.on("/system", HTTP_GET, handleSystem);
+  server.on("/status", HTTP_GET, handleStatus);
 
   delay(1000);
 
+  server.begin();
+
   initI2SAudio();
 
-  Serial.println("LAMP_Fun V.4.0.0");
+  Serial.println("LAMP_Fun 5.0.0");
 
   initBacklight();
 
@@ -7793,8 +7791,6 @@ void setup() {
 void loop() {
 
   SinricPro.handle();
-
-  server.handleClient();
 
   // En VU RADIAL - A se utiliza exclusivamente su decoder específico.
   // Evitar que el decoder general lea también ENCODER_A/ENCODER_B.
